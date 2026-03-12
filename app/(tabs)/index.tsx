@@ -1,98 +1,209 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, Image } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+export default function Home() {
 
-export default function HomeScreen() {
+  const tasks = [
+    {
+      id: 1,
+      title: "Complete Proposal",
+      time: "Due: 3:00PM • School",
+      priority: "High",
+      color: "border-red-400",
+      badge: "bg-red-100 text-red-500",
+      done: false,
+    },
+    {
+      id: 2,
+      title: "Review Design",
+      time: "Due: 5:00PM • Work",
+      priority: "Medium",
+      color: "border-orange-400",
+      badge: "bg-orange-100 text-orange-500",
+      done: false,
+    },
+    {
+      id: 3,
+      title: "Team Meeting",
+      time: "Due: 10:00AM • Work",
+      priority: "Completed",
+      color: "border-green-400",
+      badge: "bg-green-100 text-green-600",
+      done: true,
+    },
+  ];
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <ScrollView className="flex-1 bg-gray-100 px-5 pt-10">
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+      {/* HEADER */}
+      <View className="flex-row justify-between items-center mb-6">
+        <View className="flex-row items-center">
+          <Text className="text-xl font-bold text-orange-500">
+            COHERA
+          </Text>
+        </View>
+
+        <Ionicons name="notifications-outline" size={22} color="#444" />
+      </View>
+
+      {/* GREETING */}
+      <Text className="text-2xl font-bold text-gray-800">
+        Hello, Mark!
+      </Text>
+
+      <Text className="text-gray-500 mb-6">
+        You have 5 tasks today.
+      </Text>
+
+      {/* TASK OVERVIEW CARD */}
+      <View className="bg-yellow-400 rounded-2xl p-5 mb-6">
+
+        <View className="flex-row items-center mb-4">
+          <Ionicons name="folder-outline" size={18} color="white" />
+          <Text className="text-white ml-2 font-semibold">
+            Task Overview
+          </Text>
+        </View>
+
+        <View className="flex-row justify-between">
+
+          <View className="bg-yellow-300 rounded-xl px-5 py-4 items-center">
+            <Text className="text-xl font-bold text-white">8</Text>
+            <Text className="text-white text-xs">To Do</Text>
+          </View>
+
+          <View className="bg-yellow-300 rounded-xl px-5 py-4 items-center">
+            <Text className="text-xl font-bold text-white">3</Text>
+            <Text className="text-white text-xs">In Progress</Text>
+          </View>
+
+          <View className="bg-yellow-300 rounded-xl px-5 py-4 items-center">
+            <Text className="text-xl font-bold text-white">12</Text>
+            <Text className="text-white text-xs">Completed</Text>
+          </View>
+
+        </View>
+      </View>
+
+      {/* GROUPS */}
+      <View className="flex-row justify-between items-center mb-3">
+        <Text className="font-semibold text-gray-800">
+          My Groups
+        </Text>
+
+        <Text className="text-orange-500 text-sm">
+          See All →
+        </Text>
+      </View>
+
+      <View className="flex-row flex-wrap justify-between mb-6">
+
+        {/* GROUP CARD */}
+        <View className="bg-white rounded-xl border border-orange-400 w-[48%] p-4 items-center mb-4 shadow">
+
+          <Image
+            source={{ uri: "https://cdn-icons-png.flaticon.com/512/3135/3135755.png" }}
+            className="w-10 h-10 mb-2"
+          />
+
+          <Text className="font-semibold">
+            School
+          </Text>
+
+          <Text className="text-xs text-gray-500">
+            5 tasks
+          </Text>
+
+        </View>
+
+        <View className="bg-white rounded-xl border border-orange-400 w-[48%] p-4 items-center mb-4 shadow">
+
+          <Image
+            source={{ uri: "https://cdn-icons-png.flaticon.com/512/1995/1995574.png" }}
+            className="w-10 h-10 mb-2"
+          />
+
+          <Text className="font-semibold">
+            Work
+          </Text>
+
+          <Text className="text-xs text-gray-500">
+            3 tasks
+          </Text>
+
+        </View>
+
+        <View className="bg-white rounded-xl border border-orange-400 w-[48%] p-4 items-center mb-4 shadow">
+
+          <Image
+            source={{ uri: "https://cdn-icons-png.flaticon.com/512/201/201818.png" }}
+            className="w-10 h-10 mb-2"
+          />
+
+          <Text className="font-semibold">
+            Family
+          </Text>
+
+          <Text className="text-xs text-gray-500">
+            2 tasks
+          </Text>
+
+        </View>
+
+        {/* NEW GROUP */}
+        <View className="border-2 border-dashed border-gray-300 rounded-xl w-[48%] p-4 items-center justify-center mb-4">
+
+          <Ionicons name="add" size={30} color="#aaa" />
+
+          <Text className="text-gray-400 text-sm mt-1">
+            New Group
+          </Text>
+
+        </View>
+
+      </View>
+
+      {/* TODAY TASKS */}
+      <Text className="font-semibold text-gray-800 mb-3">
+        Today's Task
+      </Text>
+
+      {tasks.map((task) => (
+        <View
+          key={task.id}
+          className={`bg-white rounded-xl p-4 mb-3 border-l-4 ${task.color} flex-row justify-between items-center shadow`}
+        >
+
+          <View className="flex-row items-center">
+
+            <Ionicons
+              name={task.done ? "checkbox" : "square-outline"}
+              size={20}
+              color={task.done ? "green" : "#444"}
+            />
+
+            <View className="ml-3">
+              <Text className="font-semibold">
+                {task.title}
+              </Text>
+
+              <Text className="text-xs text-gray-500">
+                {task.time}
+              </Text>
+            </View>
+
+          </View>
+
+          <View className={`px-3 py-1 rounded-full ${task.badge}`}>
+            <Text className="text-xs">
+              {task.priority}
+            </Text>
+          </View>
+
+        </View>
+      ))}
+
+    </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
-  },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-  },
-});
