@@ -6,6 +6,7 @@ const firebaseConfig = {
   apiKey: "AIzaSyAZSZzZalxUGM_ygoahyXBgrqEhXK2gD7o",
   authDomain: "grouptaskmanager-ac1cd.firebaseapp.com",
   projectId: "grouptaskmanager-ac1cd",
+  storageBucket: "grouptaskmanager-ac1cd.firebasestorage.app",
   messagingSenderId: "586147687520",
   appId: "1:586147687520:web:72cdcbd655443574b3e705",
 };

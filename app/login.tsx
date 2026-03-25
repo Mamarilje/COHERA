@@ -1,7 +1,36 @@
-import { View, Text, TextInput, Pressable } from "react-native";
+import { View, Text, TextInput, Pressable, ActivityIndicator, Alert } from "react-native";
 import { router } from "expo-router";
+import { useState } from "react";
+import { loginUser } from "@/src/auth/login";
 
 export default function Login() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleLogin = async () => {
+    if (!email || !password) {
+      setError("Please fill in all fields");
+      Alert.alert("Error", "Please fill in all fields");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    try {
+      await loginUser(email, password);
+      router.replace("/(tabs)");
+    } catch (err: any) {
+      const errorMessage = err?.message || "Login failed";
+      setError(errorMessage);
+      Alert.alert("Login Error", errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <View className="flex-1 justify-center px-6 bg-white">
 
@@ -9,27 +38,44 @@ export default function Login() {
         Login
       </Text>
 
+      {error ? (
+        <Text className="text-red-500 text-center mb-4">{error}</Text>
+      ) : null}
+
       <TextInput
         placeholder="Email"
-        className="border p-4 rounded-xl mb-4"
+        value={email}
+        onChangeText={setEmail}
+        editable={!loading}
+        autoCapitalize="none"
+        keyboardType="email-address"
+        className="border p-4 rounded-xl mb-4 border-gray-300"
       />
 
       <TextInput
         placeholder="Password"
+        value={password}
+        onChangeText={setPassword}
+        editable={!loading}
         secureTextEntry
-        className="border p-4 rounded-xl mb-6"
+        className="border p-4 rounded-xl mb-6 border-gray-300"
       />
 
       <Pressable
-        onPress={() => router.replace("/(tabs)")}
-        className="bg-yellow-500 p-4 rounded-xl mb-4"
+        onPress={handleLogin}
+        disabled={loading}
+        className={`${loading ? "bg-yellow-400" : "bg-yellow-500"} p-4 rounded-xl mb-4`}
       >
-        <Text className="text-white text-center font-bold">
-          Login
-        </Text>
+        {loading ? (
+          <ActivityIndicator color="white" />
+        ) : (
+          <Text className="text-white text-center font-bold">
+            Login
+          </Text>
+        )}
       </Pressable>
 
-      <Pressable onPress={() => router.push("./register")}>
+      <Pressable onPress={() => router.push("./register")} disabled={loading}>
         <Text className="text-center text-gray-500">
           Don't have an account? Register
         </Text>
