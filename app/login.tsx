@@ -2,6 +2,9 @@ import { View, Text, TextInput, Pressable, ActivityIndicator, Alert } from "reac
 import { router } from "expo-router";
 import { useState } from "react";
 import { loginUser } from "@/src/auth/login";
+import { supabase } from "@/src/Supabase/supabaseConfig";
+import { getAuth } from "firebase/auth";
+
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -9,27 +12,54 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleLogin = async () => {
-    if (!email || !password) {
-      setError("Please fill in all fields");
-      Alert.alert("Error", "Please fill in all fields");
-      return;
+ const handleLogin = async (): Promise<void> => {
+  if (!email || !password) {
+    setError("Please fill in all fields");
+    Alert.alert("Error", "Please fill in all fields");
+    return;
+  }
+
+  setLoading(true);
+  setError("");
+
+  try {
+    // 🔥 Login with Firebase
+    await loginUser(email, password);
+
+    // 🔥 Get current user
+    const user = getAuth().currentUser;
+
+    if (user) {
+      // 🔥 Ensure profile exists in Supabase
+      const { error } = await supabase
+        .from("profiles")
+        .upsert(
+  {
+    firebase_uid: user.uid,
+    email: user.email ?? null,
+    updated_at: new Date().toISOString(),
+  },
+  {
+    onConflict: "firebase_uid", // 🔥 THIS FIXES 409 ERROR
+  }
+);
+
+      if (error) {
+        console.warn("Supabase upsert warning:", error.message);
+      }
     }
 
-    setLoading(true);
-    setError("");
+    // 🔥 Navigate AFTER sync
+    router.replace("/(tabs)");
 
-    try {
-      await loginUser(email, password);
-      router.replace("/(tabs)");
-    } catch (err: any) {
-      const errorMessage = err?.message || "Login failed";
-      setError(errorMessage);
-      Alert.alert("Login Error", errorMessage);
-    } finally {
-      setLoading(false);
-    }
-  };
+  } catch (err: any) {
+    const errorMessage: string = err?.message || "Login failed";
+    setError(errorMessage);
+    Alert.alert("Login Error", errorMessage);
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <View className="flex-1 justify-center px-6 bg-white">

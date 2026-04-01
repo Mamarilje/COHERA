@@ -1,47 +1,73 @@
 import { supabase } from "../Supabase/supabaseConfig";
 
-export const supabaseLoginUser = async (email: string, password: string) => {
-  try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+// Remove all auth functions - we don't need them since Firebase handles auth
 
-    if (error) throw error;
-    return data.user;
+// Keep only the sync function that creates/updates profiles
+export const syncFirebaseToSupabaseAuth = async (firebaseUid: string, email: string, name?: string) => {
+  try {
+    console.log('Syncing Firebase user to Supabase profiles:', firebaseUid);
+    
+    // Check if user already exists in profiles
+    const { data: existingProfile, error: fetchError } = await supabase
+      .from('profiles')
+      .select('firebase_uid')
+      .eq('firebase_uid', firebaseUid)
+      .maybeSingle();
+
+    if (fetchError) {
+      console.error('Error checking existing user:', fetchError);
+    }
+
+    // If user exists, update their email and name
+    if (existingProfile) {
+      console.log('Supabase profile already exists for:', email);
+      
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({
+          email: email,
+          full_name: name || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('firebase_uid', firebaseUid);
+      
+      if (updateError) {
+        console.error('Error updating profile:', updateError);
+        throw updateError;
+      }
+      
+      return { success: true, exists: true };
+    }
+
+    // Create new profile
+    const { error: insertError } = await supabase
+      .from('profiles')
+      .insert({
+        firebase_uid: firebaseUid,
+        email: email,
+        full_name: name || null,
+        updated_at: new Date().toISOString(),
+      });
+
+    if (insertError) {
+      console.error('Error creating profile:', insertError);
+      throw insertError;
+    }
+    
+    console.log('Supabase profile created for:', email);
+    return { success: true, exists: false };
   } catch (error: any) {
-    throw new Error(error?.message || "Login failed with Supabase");
+    console.error('Supabase sync error:', error);
+    // Don't throw - just log the error
+    return { success: false, error: error.message };
   }
 };
 
-export const supabaseRegisterUser = async (
-  name: string,
-  email: string,
-  password: string
-) => {
+// Helper to ensure profile exists (non-blocking)
+export const ensureProfileExists = async (firebaseUid: string, email: string, name?: string) => {
   try {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: name,
-        },
-      },
-    });
-
-    if (error) throw error;
-    return data.user;
-  } catch (error: any) {
-    throw new Error(error?.message || "Registration failed with Supabase");
-  }
-};
-
-export const supabaseLogoutUser = async () => {
-  try {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
-  } catch (error: any) {
-    throw new Error(error?.message || "Logout failed");
+    await syncFirebaseToSupabaseAuth(firebaseUid, email, name);
+  } catch (error) {
+    console.error('Failed to ensure profile:', error);
   }
 };
