@@ -1,6 +1,7 @@
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../Firebase/firebaseConfig";
+import { syncFirebaseToSupabaseAuth } from "./supabaseAuth";
 
 export const registerUser = async (
   name: string,
@@ -16,13 +17,20 @@ export const registerUser = async (
 
     const user = userCredential.user;
 
-    // Don't store password in database for security
+    // Store in Firebase Firestore
     await setDoc(doc(db, "users", user.uid), {
       name,
       email,
       photoURL: "",
       createdAt: serverTimestamp(),
     });
+
+    // Sync Firebase user to Supabase profiles (non-blocking)
+    syncFirebaseToSupabaseAuth(user.uid, email, name)
+      .catch(error => {
+        console.warn("Supabase sync warning:", error);
+        // Don't throw - let registration succeed even if sync fails
+      });
 
     return user;
   } catch (error: any) {
@@ -37,4 +45,3 @@ export const registerUser = async (
     throw error;
   }
 };
-

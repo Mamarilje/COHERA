@@ -1,9 +1,47 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // User documents - all authenticated users can read user profiles, only own write
     match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Groups collection
+    match /groups/{groupId} {
+      // Allow all authenticated users to read groups
+      allow read: if request.auth != null;
+      
+      // Allow creating groups
+      allow create: if request.auth != null && 
+                      request.auth.uid == request.resource.data.createdBy;
+      
+      // Allow updating/deleting groups created by user
+      allow update, delete: if request.auth != null && 
+                             request.auth.uid == resource.data.createdBy;
+    }
+
+    // Tasks collection
+    match /tasks/{taskId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow create, update, delete: if request.auth != null && 
+                                      request.auth.uid == request.resource.data.userId;
+    }
+
+    // Join requests collection
+    match /joinRequests/{requestId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && 
+                      request.auth.uid == request.resource.data.userId;
+      allow update: if request.auth != null;
+    }
+
+    // Profiles collection
+    match /profiles/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
+
+    // Default deny
     match /{document=**} {
       allow read, write: if false;
     }
