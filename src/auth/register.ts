@@ -21,6 +21,7 @@ export const registerUser = async (
     await setDoc(doc(db, "users", user.uid), {
       name,
       email,
+      profileImage: "",
       photoURL: "",
       createdAt: serverTimestamp(),
     });

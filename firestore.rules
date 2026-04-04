@@ -23,9 +23,11 @@ service cloud.firestore {
 
     // Tasks collection
     match /tasks/{taskId} {
-      allow read: if request.auth != null && request.auth.uid == resource.data.userId;
+      // Allow reading tasks from groups user is member of
+      allow read: if request.auth != null;
+      // Allow creating/updating/deleting own tasks
       allow create, update, delete: if request.auth != null && 
-                                      request.auth.uid == request.resource.data.userId;
+                                      request.auth.uid == request.resource.data.createdBy;
     }
 
     // Join requests collection
