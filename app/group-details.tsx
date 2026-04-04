@@ -98,7 +98,8 @@ export default function GroupDetails() {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
   const [joinCode, setJoinCode] = useState('');
-  const [activeTab, setActiveTab] = useState<'project' | 'meetings' | 'members' | 'progress'>('project');
+  const [activeTab, setActiveTab] = useState<'project' | 'meetings' | 'members' | 'progress' | 'calendar'>('project');
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date>(new Date());
   const [showDeadlinePicker, setShowDeadlinePicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -352,91 +353,118 @@ export default function GroupDetails() {
   };
 
   const handleCreateTask = async (e?: any) => {
+    console.log('=== handleCreateTask START ===');
+    console.log('Task Form Data:', taskFormData);
+    console.log('Group ID:', groupId);
+    console.log('Current User:', currentUser?.uid);
+
     if (!taskFormData.title.trim()) {
+      console.log('ERROR: No title');
       Alert.alert('Error', 'Please enter a task title');
       return;
     }
 
     if (!taskFormData.priority) {
+      console.log('ERROR: No priority');
       Alert.alert('Error', 'Please select a priority');
       return;
     }
 
     if (!taskFormData.deadline) {
+      console.log('ERROR: No deadline');
       Alert.alert('Error', 'Please select a deadline');
       return;
     }
 
-    if (taskFormData.files.length < 5) {
-      Alert.alert('Error', `Please add at least 5 files (${taskFormData.files.length}/5)`);
-      return;
-    }
-
     try {
+      console.log('Validation passed, starting upload...');
       setIsUploadingFiles(true);
       let uploadedFileUrls: string[] = [];
 
-      // Upload files to Supabase Storage
+      // Upload files to Supabase Storage (optional)
       if (taskFormData.files.length > 0) {
-        const uploadPromises = taskFormData.files.map(async (file) => {
+        console.log(`Uploading ${taskFormData.files.length} files...`);
+        const uploadPromises = taskFormData.files.map(async (file, index) => {
           try {
+            console.log(`Uploading file ${index + 1}: ${file.name}`);
             const fileName = `${Date.now()}-${file.name}`;
             const folderPath = `tasks/${groupId}/${currentUser?.uid}`;
+            const fullPath = `${folderPath}/${fileName}`;
+
+            console.log(`File path: ${fullPath}`);
+            console.log(`File URI: ${file.uri}`);
 
             // Read the file
+            console.log('Reading file...');
             const response = await fetch(file.uri);
+            console.log('Fetch response status:', response.status);
             const blob = await response.blob();
+            console.log('Blob created:', blob.size, 'bytes');
 
             // Upload to Supabase
+            console.log(`Uploading to Supabase at: ${fullPath}`);
             const { data, error } = await supabase.storage
               .from('task-files')
-              .upload(`${folderPath}/${fileName}`, blob, {
+              .upload(fullPath, blob, {
                 cacheControl: '3600',
                 upsert: false,
               });
 
             if (error) {
-              console.error('Upload error:', error);
+              console.error('Supabase upload error:', error);
               return null;
             }
 
+            console.log('Upload successful, data:', data);
+
             // Get public URL
+            console.log('Getting public URL...');
             const { data: publicUrl } = supabase.storage
               .from('task-files')
-              .getPublicUrl(`${folderPath}/${fileName}`);
+              .getPublicUrl(fullPath);
 
-            return publicUrl.publicUrl;
+            console.log('Public URL:', publicUrl?.publicUrl);
+            return publicUrl?.publicUrl;
           } catch (error) {
-            console.error('Error uploading file:', error);
+            console.error(`Error uploading file ${file.name}:`, error);
             return null;
           }
         });
 
         uploadedFileUrls = (await Promise.all(uploadPromises)).filter((url) => url !== null) as string[];
+        console.log('Upload results:', uploadedFileUrls.length, 'files uploaded');
 
-        if (uploadedFileUrls.length === 0) {
-          Alert.alert('Error', 'Failed to upload files');
-          setIsUploadingFiles(false);
-          return;
+        // If some files uploaded but not all, warn user but continue
+        if (uploadedFileUrls.length > 0 && uploadedFileUrls.length < taskFormData.files.length) {
+          console.warn(`Only ${uploadedFileUrls.length} out of ${taskFormData.files.length} files uploaded`);
         }
       }
 
       // Save task with file URLs to Firestore
-      await addDoc(collection(db, 'tasks'), {
+      console.log('Saving task to Firestore...');
+      const taskData = {
         groupId: groupId,
         title: taskFormData.title,
         description: taskFormData.description,
         priority: taskFormData.priority,
         deadline: taskFormData.deadline,
         assignedTo: taskFormData.assignedTo,
-        fileUrls: uploadedFileUrls,
-        fileNames: taskFormData.files.map((f) => f.name),
+        ...(uploadedFileUrls.length > 0 && { fileUrls: uploadedFileUrls }),
+        ...(uploadedFileUrls.length > 0 && { fileNames: taskFormData.files.slice(0, uploadedFileUrls.length).map((f) => f.name) }),
         completed: false,
         createdBy: currentUser?.uid,
         createdAt: serverTimestamp(),
-      });
+      };
+      console.log('Task data to save:', taskData);
 
-      Alert.alert('Success', 'Task created successfully with files');
+      const docRef = await addDoc(collection(db, 'tasks'), taskData);
+      console.log('Task created with ID:', docRef.id);
+
+      const successMessage = uploadedFileUrls.length > 0 
+        ? `Task created successfully with ${uploadedFileUrls.length} file(s)`
+        : 'Task created successfully';
+      Alert.alert('Success', successMessage);
+      
       setTaskFormData({
         title: '',
         description: '',
@@ -447,12 +475,15 @@ export default function GroupDetails() {
       });
       setShowTaskModal(false);
       setIsUploadingFiles(false);
+      console.log('Fetching group details...');
       fetchGroupDetails();
     } catch (error) {
       console.error('Error creating task:', error);
-      Alert.alert('Error', 'Failed to create task');
+      console.error('Error stack:', (error as any)?.stack);
+      Alert.alert('Error', `Failed to create task: ${(error as any)?.message}`);
       setIsUploadingFiles(false);
     }
+    console.log('=== handleCreateTask END ===');
   };
 
   const toggleTaskComplete = async (taskId: string, currentStatus: boolean) => {
@@ -465,6 +496,32 @@ export default function GroupDetails() {
       console.error('Error updating task:', error);
       Alert.alert('Error', 'Failed to update task');
     }
+  };
+
+  const deleteTask = async (taskId: string) => {
+    try {
+      await deleteDoc(doc(db, 'tasks', taskId));
+      fetchGroupDetails();
+      Alert.alert('Success', 'Task deleted');
+    } catch (error) {
+      console.error('Error deleting task:', error);
+      Alert.alert('Error', 'Failed to delete task');
+    }
+  };
+
+  const getTasksForDate = (date: Date) => {
+    return tasks.filter((task) => {
+      const taskDate = new Date(task.deadline);
+      return (
+        taskDate.getDate() === date.getDate() &&
+        taskDate.getMonth() === date.getMonth() &&
+        taskDate.getFullYear() === date.getFullYear()
+      );
+    });
+  };
+
+  const hasTasksOnDate = (date: Date) => {
+    return getTasksForDate(date).length > 0;
   };
 
   const toggleMember = (memberId: string) => {
@@ -578,17 +635,17 @@ export default function GroupDetails() {
         </View>
 
         {/* Tab Navigation */}
-        <View className="flex-row mb-6 bg-white rounded-xl p-1 shadow-sm">
-          {(['project', 'meetings', 'progress', 'members'] as const).map((tab) => (
+        <View className="flex-row mb-6 bg-white rounded-xl p-1 shadow-sm overflow-x-auto">
+          {(['project', 'meetings', 'progress', 'calendar', 'members'] as const).map((tab) => (
             <TouchableOpacity
               key={tab}
               onPress={() => setActiveTab(tab)}
-              className={`flex-1 py-3 rounded-lg ${
+              className={`py-3 px-4 rounded-lg ${
                 activeTab === tab ? 'bg-yellow-400' : ''
               }`}
             >
               <Text
-                className={`text-center font-semibold capitalize ${
+                className={`font-semibold capitalize whitespace-nowrap ${
                   activeTab === tab ? 'text-white' : 'text-gray-600'
                 }`}
               >
@@ -627,32 +684,49 @@ export default function GroupDetails() {
                     key={task.id}
                     className={`bg-white rounded-xl p-4 shadow-sm border-l-4 ${getPriorityColor(task.priority)}`}
                   >
-                    <View className="flex-row items-start">
-                      <TouchableOpacity 
-                        onPress={() => toggleTaskComplete(task.id, task.completed)}
-                        className="mt-1"
-                      >
-                        <Ionicons 
-                          name={task.completed ? 'checkbox' : 'checkbox-outline'} 
-                          size={20} 
-                          color={task.completed ? '#22C55E' : '#9CA3AF'} 
-                        />
-                      </TouchableOpacity>
-                      <View className="ml-3 flex-1">
-                        <Text className={`font-semibold ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
-                          {task.title}
-                        </Text>
-                        {task.description ? (
-                          <Text className="text-xs text-gray-500 mt-1">{task.description}</Text>
-                        ) : null}
-                        <View className="flex-row items-center gap-2 mt-2">
-                          <Ionicons name="calendar-outline" size={12} color="#9CA3AF" />
-                          <Text className="text-xs text-gray-600">
-                            Due: {new Date(task.deadline).toLocaleDateString()}
+                    <View className="flex-row items-start justify-between">
+                      <View className="flex-row items-start flex-1">
+                        <TouchableOpacity 
+                          onPress={() => toggleTaskComplete(task.id, task.completed)}
+                          className="mt-1"
+                        >
+                          <Ionicons 
+                            name={task.completed ? 'checkbox' : 'checkbox-outline'} 
+                            size={20} 
+                            color={task.completed ? '#22C55E' : '#9CA3AF'} 
+                          />
+                        </TouchableOpacity>
+                        <View className="ml-3 flex-1">
+                          <Text className={`font-semibold ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                            {task.title}
                           </Text>
-                          <Text className="text-xs text-gray-600">• {task.priority}</Text>
+                          {task.description ? (
+                            <Text className="text-xs text-gray-500 mt-1">{task.description}</Text>
+                          ) : null}
+                          <View className="flex-row items-center gap-2 mt-2">
+                            <Ionicons name="calendar-outline" size={12} color="#9CA3AF" />
+                            <Text className="text-xs text-gray-600">
+                              Due: {new Date(task.deadline).toLocaleDateString()}
+                            </Text>
+                            <Text className="text-xs text-gray-600">• {task.priority}</Text>
+                          </View>
                         </View>
                       </View>
+                      <TouchableOpacity
+                        onPress={() => {
+                          Alert.alert('Delete Task', 'Are you sure?', [
+                            { text: 'Cancel', style: 'cancel' },
+                            {
+                              text: 'Delete',
+                              style: 'destructive',
+                              onPress: () => deleteTask(task.id),
+                            },
+                          ]);
+                        }}
+                        className="ml-2"
+                      >
+                        <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                      </TouchableOpacity>
                     </View>
                   </View>
                 ))}
@@ -753,6 +827,171 @@ export default function GroupDetails() {
                           className="h-full bg-yellow-400"
                           style={{ width: `${member.completionRate}%` }}
                         />
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* Calendar Tab Content */}
+        {activeTab === 'calendar' && (
+          <View>
+            <View className="bg-white rounded-xl p-6 shadow-sm mb-6">
+              {/* Calendar Header */}
+              <View className="flex-row justify-between items-center mb-6">
+                <TouchableOpacity
+                  onPress={() => {
+                    const newDate = new Date(selectedCalendarDate);
+                    newDate.setMonth(newDate.getMonth() - 1);
+                    setSelectedCalendarDate(newDate);
+                  }}
+                >
+                  <Ionicons name="chevron-back" size={24} color="#EAB308" />
+                </TouchableOpacity>
+                <Text className="text-lg font-semibold text-gray-900">
+                  {selectedCalendarDate.toLocaleString('en-US', { month: 'long', year: 'numeric' })}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    const newDate = new Date(selectedCalendarDate);
+                    newDate.setMonth(newDate.getMonth() + 1);
+                    setSelectedCalendarDate(newDate);
+                  }}
+                >
+                  <Ionicons name="chevron-forward" size={24} color="#EAB308" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Weekday Headers */}
+              <View className="flex-row justify-between mb-3">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+                  <Text key={day} className="text-xs font-semibold text-gray-500 w-12 text-center">
+                    {day}
+                  </Text>
+                ))}
+              </View>
+
+              {/* Calendar Days */}
+              <View>
+                {(() => {
+                  const year = selectedCalendarDate.getFullYear();
+                  const month = selectedCalendarDate.getMonth();
+                  const firstDay = new Date(year, month, 1).getDay();
+                  const daysInMonth = new Date(year, month + 1, 0).getDate();
+                  const days: (number | null)[] = Array(firstDay).fill(null);
+                  for (let i = 1; i <= daysInMonth; i++) days.push(i);
+
+                  return (
+                    <View className="flex-row flex-wrap">
+                      {days.map((day, index) => {
+                        const dateObj = day ? new Date(year, month, day) : null;
+                        const hasTasks = dateObj ? hasTasksOnDate(dateObj) : false;
+                        const isSelected =
+                          dateObj &&
+                          dateObj.getDate() === new Date().getDate() &&
+                          dateObj.getMonth() === new Date().getMonth() &&
+                          dateObj.getFullYear() === new Date().getFullYear();
+
+                        return (
+                          <TouchableOpacity
+                            key={index}
+                            onPress={() => {
+                              if (day) setSelectedCalendarDate(new Date(year, month, day));
+                            }}
+                            disabled={!day}
+                            className={`w-1/7 aspect-square rounded-lg mb-2 items-center justify-center ${
+                              !day ? 'bg-transparent' : 'bg-gray-50'
+                            } ${
+                              isSelected ? 'bg-yellow-400' : ''
+                            } ${
+                              hasTasks && !isSelected ? 'border-2 border-yellow-400' : ''
+                            }`}
+                          >
+                            {day && (
+                              <>
+                                <Text
+                                  className={`font-semibold ${
+                                    isSelected ? 'text-white' : 'text-gray-800'
+                                  }`}
+                                >
+                                  {day}
+                                </Text>
+                                {hasTasks && !isSelected && (
+                                  <View className="w-1.5 h-1.5 bg-yellow-400 rounded-full mt-1" />
+                                )}
+                              </>
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  );
+                })()}
+              </View>
+            </View>
+
+            {/* Tasks for Selected Date */}
+            <View>
+              <Text className="font-semibold text-gray-800 text-lg mb-4">
+                Tasks for {selectedCalendarDate.toLocaleDateString('en-US', {
+                  weekday: 'long',
+                  month: 'short',
+                  day: 'numeric',
+                })}
+              </Text>
+
+              {getTasksForDate(selectedCalendarDate).length === 0 ? (
+                <View className="bg-white rounded-xl p-8 shadow-sm items-center">
+                  <Ionicons name="calendar-outline" size={40} color="#D1D5DB" />
+                  <Text className="text-gray-500 mt-3">No tasks on this date</Text>
+                </View>
+              ) : (
+                <View className="space-y-3 mb-6">
+                  {getTasksForDate(selectedCalendarDate).map((task) => (
+                    <View
+                      key={task.id}
+                      className={`bg-white rounded-xl p-4 shadow-sm border-l-4 ${getPriorityColor(task.priority)}`}
+                    >
+                      <View className="flex-row items-start justify-between">
+                        <View className="flex-row items-start flex-1">
+                          <TouchableOpacity 
+                            onPress={() => toggleTaskComplete(task.id, task.completed)}
+                            className="mt-1"
+                          >
+                            <Ionicons 
+                              name={task.completed ? 'checkbox' : 'checkbox-outline'} 
+                              size={20} 
+                              color={task.completed ? '#22C55E' : '#9CA3AF'} 
+                            />
+                          </TouchableOpacity>
+                          <View className="ml-3 flex-1">
+                            <Text className={`font-semibold ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                              {task.title}
+                            </Text>
+                            {task.description ? (
+                              <Text className="text-xs text-gray-500 mt-1">{task.description}</Text>
+                            ) : null}
+                            <Text className="text-xs text-gray-600 mt-2">Priority: {task.priority}</Text>
+                          </View>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => {
+                            Alert.alert('Delete Task', 'Are you sure?', [
+                              { text: 'Cancel', style: 'cancel' },
+                              {
+                                text: 'Delete',
+                                style: 'destructive',
+                                onPress: () => deleteTask(task.id),
+                              },
+                            ]);
+                          }}
+                          className="ml-2"
+                        >
+                          <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                        </TouchableOpacity>
                       </View>
                     </View>
                   ))}
@@ -990,7 +1229,10 @@ export default function GroupDetails() {
                 >
                   <Ionicons name="document-attach" size={24} color="#EAB308" />
                   <Text className="text-sm font-semibold text-yellow-600 mt-2">
-                    + Add Files
+                    + Add Files (Optional)
+                  </Text>
+                  <Text className="text-xs text-gray-500 mt-1">
+                    {taskFormData.files.length} file(s) selected
                   </Text>
                 </TouchableOpacity>
 

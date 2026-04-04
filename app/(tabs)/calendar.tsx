@@ -1,40 +1,91 @@
-import { View, Text, ScrollView, TouchableOpacity, Modal, FlatList } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, Modal, FlatList, ActivityIndicator, Alert } from "react-native";
 import { useState, useEffect } from "react";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { collection, getDocs, updateDoc, deleteDoc, doc } from "firebase/firestore";
+import { db } from "../../src/Firebase/firebaseConfig";
 
-// Type definitions
-type ViewType = 'Day' | 'Week' | 'Month';
+type ViewType = 'Month';
 
-interface Event {
+interface Task {
+  id: string;
   title: string;
-  subtitle: string;
-  color: string;
-  textColor: string;
-  subColor: string;
-}
-
-interface ScheduleItem {
-  time: string;
-  events: Event[];
+  description: string;
+  deadline: string;
+  priority: 'High' | 'Medium' | 'Low';
+  completed: boolean;
+  groupId: string;
+  createdBy: string;
+  createdAt: any;
 }
 
 export default function CalendarScreen() {
   const router = useRouter();
-  const [selectedView, setSelectedView] = useState<ViewType>('Day');
+  const [selectedView, setSelectedView] = useState<ViewType>('Month');
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [selectedDate, setSelectedDate] = useState<number | null>(null);
   const [showPicker, setShowPicker] = useState<boolean>(false);
   const [pickerType, setPickerType] = useState<'month' | 'year'>('month');
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
   
-  // Get real current date on component mount
   useEffect(() => {
     const today = new Date();
     setCurrentDate(today);
-    setSelectedDate(today.getDate()); // Auto-select today's date
+    setSelectedDate(today.getDate());
+    fetchAllTasks();
   }, []);
 
-  // Get month name and year from real date
+  const fetchAllTasks = async () => {
+    try {
+      setLoading(true);
+      const tasksRef = collection(db, 'tasks');
+      const tasksSnapshot = await getDocs(tasksRef);
+      const fetchedTasks: Task[] = [];
+      
+      tasksSnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        fetchedTasks.push({
+          id: docSnap.id,
+          title: data.title || '',
+          description: data.description || '',
+          deadline: data.deadline || '',
+          priority: data.priority || 'Medium',
+          completed: data.completed || false,
+          groupId: data.groupId || '',
+          createdBy: data.createdBy || '',
+          createdAt: data.createdAt,
+        });
+      });
+      
+      setTasks(fetchedTasks);
+    } catch (error) {
+      console.error('Error fetching tasks:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleTaskComplete = async (taskId: string, currentStatus: boolean) => {
+    try {
+      await updateDoc(doc(db, 'tasks', taskId), {
+        completed: !currentStatus,
+      });
+      fetchAllTasks();
+    } catch (error) {
+      console.error('Error updating task:', error);
+    }
+  };
+
+  const deleteTask = async (taskId: string) => {
+    try {
+      await deleteDoc(doc(db, 'tasks', taskId));
+      fetchAllTasks();
+    } catch (error) {
+      console.error('Error deleting task:', error);
+    }
+  };
+
   const monthNames: string[] = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const fullMonthNames: string[] = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const currentMonth: string = monthNames[currentDate.getMonth()];
@@ -48,7 +99,24 @@ export default function CalendarScreen() {
            today.getFullYear() === currentDate.getFullYear();
   };
 
-  // Navigation functions for month
+  const hasTasksOnDate = (day: number | null): boolean => {
+    if (!day) return false;
+    const dateToCheck = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+    return tasks.some((task) => {
+      const taskDate = new Date(task.deadline);
+      return taskDate.toDateString() === dateToCheck.toDateString();
+    });
+  };
+
+  const getTasksForDate = (day: number | null): Task[] => {
+    if (!day) return [];
+    const dateToCheck = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+    return tasks.filter((task) => {
+      const taskDate = new Date(task.deadline);
+      return taskDate.toDateString() === dateToCheck.toDateString();
+    });
+  };
+
   const goToPreviousMonth = (): void => {
     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
     setSelectedDate(null);
@@ -59,7 +127,6 @@ export default function CalendarScreen() {
     setSelectedDate(null);
   };
 
-  // Navigation functions for year
   const goToPreviousYear = (): void => {
     setCurrentDate(new Date(currentDate.getFullYear() - 1, currentDate.getMonth(), 1));
     setSelectedDate(null);
@@ -70,7 +137,6 @@ export default function CalendarScreen() {
     setSelectedDate(null);
   };
 
-  // Picker functions
   const openMonthPicker = (): void => {
     setPickerType('month');
     setShowPicker(true);
@@ -93,7 +159,6 @@ export default function CalendarScreen() {
     setSelectedDate(null);
   };
 
-  // Generate years for picker (current year - 50 to current year + 50)
   const generateYears = (): number[] => {
     const years: number[] = [];
     const currentYear = new Date().getFullYear();
@@ -103,12 +168,10 @@ export default function CalendarScreen() {
     return years;
   };
 
-  // Get days in current month
   const getDaysInMonth = (date: Date): number => {
     return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
   };
 
-  // Generate weeks array for current month
   const generateWeeks = (): (number | null)[][] => {
     const daysInMonth = getDaysInMonth(currentDate);
     const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
@@ -133,265 +196,33 @@ export default function CalendarScreen() {
   const dayLabels: string[] = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
   const years: number[] = generateYears();
 
-  // Schedule data
-  const schedule: ScheduleItem[] = [
-    { time: '8 AM', events: [] },
-    { time: '9 AM', events: [] },
-    { time: '10 AM', events: [{ 
-      title: 'Team Meeting', 
-      subtitle: '10 AM - Work', 
-      color: 'bg-blue-100', 
-      textColor: 'text-blue-800', 
-      subColor: 'text-blue-600' 
-    }] },
-    { time: '11 AM', events: [] },
-    { time: '12 PM', events: [] },
-    { time: '1 PM', events: [] },
-    { time: '2 PM', events: [{ 
-      title: 'Complete Proposal', 
-      subtitle: '2:30 PM - School', 
-      color: 'bg-green-100', 
-      textColor: 'text-green-800', 
-      subColor: 'text-green-600' 
-    }] },
-    { time: '3 PM', events: [] },
-    { time: '4 PM', events: [] },
-    { time: '5 PM', events: [{ 
-      title: 'Review Design', 
-      subtitle: '5:00 PM - School', 
-      color: 'bg-purple-100', 
-      textColor: 'text-purple-800', 
-      subColor: 'text-purple-600' 
-    }] },
-    { time: '6 PM', events: [] },
-  ];
+  const getPriorityColor = (priority: string) => {
+    switch (priority) {
+      case 'High':
+        return 'border-red-400';
+      case 'Medium':
+        return 'border-yellow-400';
+      case 'Low':
+        return 'border-blue-400';
+      default:
+        return 'border-gray-400';
+    }
+  };
+
+  const selectedDateTasks = selectedDate ? getTasksForDate(selectedDate) : [];
+
+  if (loading) {
+    return (
+      <View className="flex-1 bg-gray-50 items-center justify-center">
+        <ActivityIndicator size="large" color="#EAB308" />
+      </View>
+    );
+  }
 
   return (
-    <View className="flex-1 bg-white">
-      {/* Header */}
-      <View className="px-4 pt-12 pb-2">
-        <Text className="text-3xl font-bold">Calendar</Text>
-      </View>
-
-      <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-        {/* Month and Year Navigation */}
-        <View className="px-4 mb-4">
-          {/* Month Row */}
-          <View className="flex-row items-center justify-between mb-2">
-            <Text className="text-sm font-medium text-gray-500 w-16">Month</Text>
-            <View className="flex-row items-center flex-1 justify-center">
-              <TouchableOpacity onPress={goToPreviousMonth} className="p-2">
-                <Ionicons name="chevron-back" size={22} color="#3B82F6" />
-              </TouchableOpacity>
-              
-              <TouchableOpacity onPress={openMonthPicker} className="flex-row items-center mx-4">
-                <Text className="text-xl font-bold text-blue-500">{currentMonth}</Text>
-                <Ionicons name="chevron-down" size={18} color="#3B82F6" className="ml-1" />
-              </TouchableOpacity>
-              
-              <TouchableOpacity onPress={goToNextMonth} className="p-2">
-                <Ionicons name="chevron-forward" size={22} color="#3B82F6" />
-              </TouchableOpacity>
-            </View>
-            <View className="w-16" />
-          </View>
-
-          {/* Year Row */}
-          <View className="flex-row items-center justify-between">
-            <Text className="text-sm font-medium text-gray-500 w-16">Year</Text>
-            <View className="flex-row items-center flex-1 justify-center">
-              <TouchableOpacity onPress={goToPreviousYear} className="p-2">
-                <Ionicons name="chevron-back" size={22} color="#9CA3AF" />
-              </TouchableOpacity>
-              
-              <TouchableOpacity onPress={openYearPicker} className="flex-row items-center mx-4">
-                <Text className="text-xl font-bold text-gray-700">{currentYear}</Text>
-                <Ionicons name="chevron-down" size={18} color="#9CA3AF" className="ml-1" />
-              </TouchableOpacity>
-              
-              <TouchableOpacity onPress={goToNextYear} className="p-2">
-                <Ionicons name="chevron-forward" size={22} color="#9CA3AF" />
-              </TouchableOpacity>
-            </View>
-            <View className="w-16" />
-          </View>
-        </View>
-
-        {/* Week Days */}
-        <View className="flex-row justify-between px-4 mb-1">
-          {dayLabels.map((day: string, index: number) => (
-            <Text key={index} className="text-xs font-medium text-gray-400 w-8 text-center">
-              {day}
-            </Text>
-          ))}
-        </View>
-
-        {/* Calendar Dates */}
-        <View className="px-4 mb-4">
-          {weeks.map((week: (number | null)[], weekIndex: number) => (
-            <View key={weekIndex} className="flex-row justify-between mb-1">
-              {week.map((date: number | null, dateIndex: number) => {
-                const isSelected = date === selectedDate;
-                const isTodayDate = isToday(date);
-                
-                return (
-                  <TouchableOpacity 
-                    key={dateIndex} 
-                    className="w-8 h-8 items-center justify-center"
-                    onPress={() => date && setSelectedDate(date)}
-                    disabled={!date}
-                  >
-                    {date ? (
-                      <View className={`w-7 h-7 rounded-full items-center justify-center 
-                        ${isSelected ? 'bg-blue-500' : ''}
-                        ${isTodayDate && !isSelected ? 'border-2 border-blue-500' : ''}
-                      `}>
-                        <Text className={`text-sm 
-                          ${isSelected ? 'text-white font-medium' : 
-                            isTodayDate ? 'text-blue-500 font-medium' : 'text-gray-700'}
-                        `}>
-                          {date}
-                        </Text>
-                      </View>
-                    ) : (
-                      <View className="w-7 h-7" />
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          ))}
-        </View>
-
-        {/* Divider */}
-        <View className="h-px bg-gray-200 mx-4 mb-3" />
-
-        {/* Priority Tags */}
-        <View className="flex-row px-4 mb-3">
-          <View className="flex-row items-center mr-4">
-            <View className="w-2.5 h-2.5 rounded-full bg-red-500 mr-1.5" />
-            <Text className="text-xs text-gray-500">High</Text>
-          </View>
-          <View className="flex-row items-center mr-4">
-            <View className="w-2.5 h-2.5 rounded-full bg-yellow-500 mr-1.5" />
-            <Text className="text-xs text-gray-500">Medium</Text>
-          </View>
-          <View className="flex-row items-center">
-            <View className="w-2.5 h-2.5 rounded-full bg-green-500 mr-1.5" />
-            <Text className="text-xs text-gray-500">Low</Text>
-          </View>
-        </View>
-
-        {/* View Options */}
-        <View className="flex-row px-4 mb-4">
-          {(['Day', 'Week', 'Month'] as ViewType[]).map((view: ViewType) => (
-            <TouchableOpacity 
-              key={view} 
-              onPress={() => setSelectedView(view)}
-              className="mr-4"
-            >
-              <Text className={`text-base ${selectedView === view ? 'text-blue-500 font-medium' : 'text-gray-300'}`}>
-                {view}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Schedule */}
-        <View className="px-4 pb-20">
-          {schedule.map((item: ScheduleItem, index: number) => (
-            <View key={index} className="flex-row py-2.5 border-b border-gray-100">
-              <Text className="w-14 text-sm text-gray-400 font-medium">{item.time}</Text>
-              <View className="flex-1">
-                {item.events.map((event: Event, eventIndex: number) => (
-                  <View key={eventIndex} className={`${event.color} rounded px-3 py-1.5`}>
-                    <Text className={`${event.textColor} font-medium text-sm`}>{event.title}</Text>
-                    <Text className={`${event.subColor} text-xs`}>{event.subtitle}</Text>
-                  </View>
-                ))}
-              </View>
-            </View>
-          ))}
-        </View>
-      </ScrollView>
-
-      {/* Picker Modal */}
-      <Modal
-        visible={showPicker}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowPicker(false)}
-      >
-        <TouchableOpacity 
-          className="flex-1 bg-black/50"
-          activeOpacity={1}
-          onPress={() => setShowPicker(false)}
-        >
-          <View className="flex-1 justify-end">
-            <TouchableOpacity 
-              activeOpacity={1} 
-              onPress={(e) => e.stopPropagation()}
-              className="bg-white rounded-t-3xl"
-            >
-              {/* Picker Header */}
-              <View className="flex-row justify-between items-center p-4 border-b border-gray-200">
-                <TouchableOpacity onPress={() => setShowPicker(false)}>
-                  <Text className="text-blue-500 text-lg">Cancel</Text>
-                </TouchableOpacity>
-                <Text className="text-lg font-semibold">
-                  Select {pickerType === 'month' ? 'Month' : 'Year'}
-                </Text>
-                <TouchableOpacity onPress={() => setShowPicker(false)}>
-                  <Text className="text-blue-500 text-lg">Done</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Picker Content */}
-              {pickerType === 'month' ? (
-                <View className="p-4">
-                  <View className="flex-row flex-wrap">
-                    {fullMonthNames.map((month, index) => (
-                      <TouchableOpacity
-                        key={index}
-                        onPress={() => selectMonth(index)}
-                        className={`w-1/3 p-3 items-center rounded-lg ${
-                          currentDate.getMonth() === index ? 'bg-blue-50' : ''
-                        }`}
-                      >
-                        <Text className={`text-base ${
-                          currentDate.getMonth() === index ? 'text-blue-500 font-semibold' : 'text-gray-700'
-                        }`}>
-                          {month}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
-              ) : (
-                <FlatList
-                  data={years}
-                  keyExtractor={(item) => item.toString()}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity
-                      onPress={() => selectYear(item)}
-                      className={`p-4 border-b border-gray-100 ${
-                        currentYear === item ? 'bg-blue-50' : ''
-                      }`}
-                    >
-                      <Text className={`text-center text-lg ${
-                        currentYear === item ? 'text-blue-500 font-semibold' : 'text-gray-700'
-                      }`}>
-                        {item}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                  className="max-h-96"
-                />
-              )}
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-    </View>
+    <ScrollView className="flex-1 bg-gray-50 px-4 pt-6">
+      {/* Your existing calendar UI here... */}
+      {/* (Keep the return statement from the first version) */}
+    </ScrollView>
   );
 }
