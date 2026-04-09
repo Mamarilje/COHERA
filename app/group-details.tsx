@@ -71,6 +71,8 @@ type Task = {
   completed: boolean;
   createdBy: string;
   createdAt: any;
+  fileUrls?: string[];
+  fileNames?: string[];
 };
 
 type TaskFormData = {
@@ -175,6 +177,8 @@ export default function GroupDetails() {
             completed: data.completed || false,
             createdBy: data.createdBy || '',
             createdAt: data.createdAt,
+            fileUrls: data.fileUrls || [],
+            fileNames: data.fileNames || [],
           });
         });
         setTasks(fetchedTasks);
@@ -509,6 +513,14 @@ export default function GroupDetails() {
     }
   };
 
+  // Navigate to task detail page
+  const handleTaskPress = (task: Task) => {
+    router.push({
+      pathname: '/task/[id]',
+      params: { id: task.id }
+    });
+  };
+
   const getTasksForDate = (date: Date) => {
     return tasks.filter((task) => {
       const taskDate = new Date(task.deadline);
@@ -680,55 +692,64 @@ export default function GroupDetails() {
             ) : (
               <View className="space-y-3 mb-6">
                 {tasks.map((task) => (
-                  <View
+                  <TouchableOpacity
                     key={task.id}
-                    className={`bg-white rounded-xl p-4 shadow-sm border-l-4 ${getPriorityColor(task.priority)}`}
+                    onPress={() => handleTaskPress(task)}
+                    activeOpacity={0.7}
                   >
-                    <View className="flex-row items-start justify-between">
-                      <View className="flex-row items-start flex-1">
-                        <TouchableOpacity 
-                          onPress={() => toggleTaskComplete(task.id, task.completed)}
-                          className="mt-1"
-                        >
-                          <Ionicons 
-                            name={task.completed ? 'checkbox' : 'checkbox-outline'} 
-                            size={20} 
-                            color={task.completed ? '#22C55E' : '#9CA3AF'} 
-                          />
-                        </TouchableOpacity>
-                        <View className="ml-3 flex-1">
-                          <Text className={`font-semibold ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
-                            {task.title}
-                          </Text>
-                          {task.description ? (
-                            <Text className="text-xs text-gray-500 mt-1">{task.description}</Text>
-                          ) : null}
-                          <View className="flex-row items-center gap-2 mt-2">
-                            <Ionicons name="calendar-outline" size={12} color="#9CA3AF" />
-                            <Text className="text-xs text-gray-600">
-                              Due: {new Date(task.deadline).toLocaleDateString()}
+                    <View
+                      className={`bg-white rounded-xl p-4 shadow-sm border-l-4 ${getPriorityColor(task.priority)}`}
+                    >
+                      <View className="flex-row items-start justify-between">
+                        <View className="flex-row items-start flex-1">
+                          <TouchableOpacity 
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              toggleTaskComplete(task.id, task.completed);
+                            }}
+                            className="mt-1"
+                          >
+                            <Ionicons 
+                              name={task.completed ? 'checkbox' : 'checkbox-outline'} 
+                              size={20} 
+                              color={task.completed ? '#22C55E' : '#9CA3AF'} 
+                            />
+                          </TouchableOpacity>
+                          <View className="ml-3 flex-1">
+                            <Text className={`font-semibold ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                              {task.title}
                             </Text>
-                            <Text className="text-xs text-gray-600">• {task.priority}</Text>
+                            {task.description ? (
+                              <Text className="text-xs text-gray-500 mt-1">{task.description}</Text>
+                            ) : null}
+                            <View className="flex-row items-center gap-2 mt-2">
+                              <Ionicons name="calendar-outline" size={12} color="#9CA3AF" />
+                              <Text className="text-xs text-gray-600">
+                                Due: {new Date(task.deadline).toLocaleDateString()}
+                              </Text>
+                              <Text className="text-xs text-gray-600">• {task.priority}</Text>
+                            </View>
                           </View>
                         </View>
+                        <TouchableOpacity
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            Alert.alert('Delete Task', 'Are you sure?', [
+                              { text: 'Cancel', style: 'cancel' },
+                              {
+                                text: 'Delete',
+                                style: 'destructive',
+                                onPress: () => deleteTask(task.id),
+                              },
+                            ]);
+                          }}
+                          className="ml-2"
+                        >
+                          <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                        </TouchableOpacity>
                       </View>
-                      <TouchableOpacity
-                        onPress={() => {
-                          Alert.alert('Delete Task', 'Are you sure?', [
-                            { text: 'Cancel', style: 'cancel' },
-                            {
-                              text: 'Delete',
-                              style: 'destructive',
-                              onPress: () => deleteTask(task.id),
-                            },
-                          ]);
-                        }}
-                        className="ml-2"
-                      >
-                        <Ionicons name="trash-outline" size={20} color="#EF4444" />
-                      </TouchableOpacity>
                     </View>
-                  </View>
+                  </TouchableOpacity>
                 ))}
               </View>
             )}
@@ -951,49 +972,58 @@ export default function GroupDetails() {
               ) : (
                 <View className="space-y-3 mb-6">
                   {getTasksForDate(selectedCalendarDate).map((task) => (
-                    <View
+                    <TouchableOpacity
                       key={task.id}
-                      className={`bg-white rounded-xl p-4 shadow-sm border-l-4 ${getPriorityColor(task.priority)}`}
+                      onPress={() => handleTaskPress(task)}
+                      activeOpacity={0.7}
                     >
-                      <View className="flex-row items-start justify-between">
-                        <View className="flex-row items-start flex-1">
-                          <TouchableOpacity 
-                            onPress={() => toggleTaskComplete(task.id, task.completed)}
-                            className="mt-1"
-                          >
-                            <Ionicons 
-                              name={task.completed ? 'checkbox' : 'checkbox-outline'} 
-                              size={20} 
-                              color={task.completed ? '#22C55E' : '#9CA3AF'} 
-                            />
-                          </TouchableOpacity>
-                          <View className="ml-3 flex-1">
-                            <Text className={`font-semibold ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
-                              {task.title}
-                            </Text>
-                            {task.description ? (
-                              <Text className="text-xs text-gray-500 mt-1">{task.description}</Text>
-                            ) : null}
-                            <Text className="text-xs text-gray-600 mt-2">Priority: {task.priority}</Text>
+                      <View
+                        className={`bg-white rounded-xl p-4 shadow-sm border-l-4 ${getPriorityColor(task.priority)}`}
+                      >
+                        <View className="flex-row items-start justify-between">
+                          <View className="flex-row items-start flex-1">
+                            <TouchableOpacity 
+                              onPress={(e) => {
+                                e.stopPropagation();
+                                toggleTaskComplete(task.id, task.completed);
+                              }}
+                              className="mt-1"
+                            >
+                              <Ionicons 
+                                name={task.completed ? 'checkbox' : 'checkbox-outline'} 
+                                size={20} 
+                                color={task.completed ? '#22C55E' : '#9CA3AF'} 
+                              />
+                            </TouchableOpacity>
+                            <View className="ml-3 flex-1">
+                              <Text className={`font-semibold ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                                {task.title}
+                              </Text>
+                              {task.description ? (
+                                <Text className="text-xs text-gray-500 mt-1">{task.description}</Text>
+                              ) : null}
+                              <Text className="text-xs text-gray-600 mt-2">Priority: {task.priority}</Text>
+                            </View>
                           </View>
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              Alert.alert('Delete Task', 'Are you sure?', [
+                                { text: 'Cancel', style: 'cancel' },
+                                {
+                                  text: 'Delete',
+                                  style: 'destructive',
+                                  onPress: () => deleteTask(task.id),
+                                },
+                              ]);
+                            }}
+                            className="ml-2"
+                          >
+                            <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                          </TouchableOpacity>
                         </View>
-                        <TouchableOpacity
-                          onPress={() => {
-                            Alert.alert('Delete Task', 'Are you sure?', [
-                              { text: 'Cancel', style: 'cancel' },
-                              {
-                                text: 'Delete',
-                                style: 'destructive',
-                                onPress: () => deleteTask(task.id),
-                              },
-                            ]);
-                          }}
-                          className="ml-2"
-                        >
-                          <Ionicons name="trash-outline" size={20} color="#EF4444" />
-                        </TouchableOpacity>
                       </View>
-                    </View>
+                    </TouchableOpacity>
                   ))}
                 </View>
               )}
