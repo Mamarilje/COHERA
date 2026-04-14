@@ -1,11 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
-import {
-  getAuth,
-  updateEmail,
-  verifyBeforeUpdateEmail
-} from "firebase/auth";
+import { getAuth, updateEmail, verifyBeforeUpdateEmail } from "firebase/auth";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TextInput as RNTextInput } from "react-native";
@@ -31,9 +27,6 @@ export default function Settings() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [userName, setUserName] = useState("");
   const [userTitle, setUserTitle] = useState("");
-  // ...other state declarations...
-  // Remove duplicate declaration of editName and setEditName
-  // Reset editName to false when modal closes
   useEffect(() => {
     if (!showEditModal) {
       setEditName(false);
@@ -58,13 +51,11 @@ export default function Settings() {
   const [otp, setOtp] = useState("");
   const [isOtpLoading, setIsOtpLoading] = useState(false);
   const [otpError, setOtpError] = useState("");
-  // State and ref for editable name field
   const [editName, setEditName] = useState(false);
   const nameInputRef = useRef<RNTextInput>(null);
-  // Fetch user data from Firebase and Supabase (same as profile.tsx)
+
   useEffect(() => {
     let isMounted = true;
-    // Listen for auth state changes
     const unsubscribe = auth.onAuthStateChanged((firebaseUser) => {
       setCurrentUser(firebaseUser);
     });
@@ -75,14 +66,12 @@ export default function Settings() {
       }
       try {
         setUserEmail(currentUser.email || "");
-        // Fetch user name and title from Firebase Firestore
         const userDoc = await getDoc(doc(db, "users", currentUser.uid));
         if (userDoc.exists() && isMounted) {
           const userData = userDoc.data();
           setUserName(userData.name || userData.displayName || "");
           setUserTitle(userData.title || "");
         }
-        // Fetch profile from Supabase including photo_url
         const { data, error } = await supabase
           .from("profiles")
           .select("photo_url, full_name")
@@ -92,11 +81,9 @@ export default function Settings() {
           console.error("Supabase fetch error (settings):", error);
         }
         if (data) {
-          // Update name if available from Supabase
           if (data.full_name && !userName) {
             setUserName(data.full_name);
           }
-          // Set photo URL with cache buster to prevent caching
           if (data.photo_url) {
             setProfileImage(data.photo_url + "?t=" + new Date().getTime());
           }
@@ -116,20 +103,17 @@ export default function Settings() {
     };
   }, [currentUser]);
 
-  // Save profile (name/title)
   const handleSaveProfile = useCallback(async () => {
     try {
       if (!currentUser) {
         Alert.alert("Error", "User not authenticated");
         return;
       }
-      // Update Firestore user document
       const userDocRef = doc(db, "users", currentUser.uid);
       await updateDoc(userDocRef, {
         name: tempName,
         title: tempTitle,
       });
-      // Update Supabase profile
       const { error: supabaseError } = await supabase
         .from("profiles")
         .update({
@@ -143,7 +127,6 @@ export default function Settings() {
       }
       setUserName(tempName);
       setUserTitle(tempTitle);
-      // Only close modal if not in the middle of email change flow
       if (!isEmailChanging && !isReauthenticating && !otpSent) {
         setShowEditModal(false);
         Alert.alert("Success", "Profile updated successfully!");
@@ -173,7 +156,6 @@ export default function Settings() {
         Alert.alert("Error", "User not authenticated");
         return;
       }
-      // Request permission
       const permissionResult =
         await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permissionResult.granted) {
@@ -183,7 +165,6 @@ export default function Settings() {
         );
         return;
       }
-      // Launch image picker
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
@@ -194,11 +175,8 @@ export default function Settings() {
         return;
       }
       setIsUploading(true);
-      // Get the selected image
       const imageUri = result.assets[0].uri;
-      // Upload to Supabase Storage
       const publicUrl = await uploadProfilePhoto(currentUser.uid, imageUri);
-      // Update Supabase profiles table with photo_url
       const { data, error: upsertError } = await supabase
         .from("profiles")
         .upsert(
@@ -218,7 +196,6 @@ export default function Settings() {
         console.error("Profile upsert error (settings):", upsertError);
         throw new Error(`Failed to update profile: ${upsertError.message}`);
       }
-      // Verify the update by fetching it back
       const { data: verifyData, error: verifyError } = await supabase
         .from("profiles")
         .select("photo_url")
@@ -227,7 +204,6 @@ export default function Settings() {
       if (verifyError) {
         console.error("Verification error (settings):", verifyError);
       } else {
-        // Update local state with cache buster
         setProfileImage(
           (verifyData?.photo_url || publicUrl) + "?t=" + new Date().getTime(),
         );
@@ -242,7 +218,6 @@ export default function Settings() {
     }
   }, [currentUser, userName, setProfileImage, setIsUploading]);
 
-  // Send OTP to new email (Firebase Auth)
   const handleSendOtp = useCallback(async () => {
     setIsOtpLoading(true);
     setOtpError("");
@@ -252,10 +227,8 @@ export default function Settings() {
         setIsOtpLoading(false);
         return;
       }
-      // Firebase: send verification email to new address (requires re-auth if recent login expired)
       await verifyBeforeUpdateEmail(currentUser, tempEmail);
       setOtpSent(true);
-      // Do not close modal, just advance to next step
       Alert.alert(
         "OTP Sent",
         "A verification link has been sent to your new email. Please check your inbox and click the link to verify.",
@@ -270,7 +243,6 @@ export default function Settings() {
     }
   }, [currentUser, tempEmail]);
 
-  // Verify OTP and update email in Firestore/Supabase
   const handleVerifyOtp = useCallback(async () => {
     setIsOtpLoading(true);
     setOtpError("");
@@ -280,17 +252,9 @@ export default function Settings() {
         setIsOtpLoading(false);
         return;
       }
-      // Firebase: update email (user must have clicked the verification link)
-      // Try to update email in Firebase Auth
       await updateEmail(currentUser, tempEmail);
-
-      // Update Firestore user document
       const userDocRef = doc(db, "users", currentUser.uid);
-      await updateDoc(userDocRef, {
-        email: tempEmail,
-      });
-
-      // Update Supabase profile
+      await updateDoc(userDocRef, { email: tempEmail });
       const { error: supabaseError } = await supabase
         .from("profiles")
         .update({
@@ -298,11 +262,9 @@ export default function Settings() {
           updated_at: new Date().toISOString(),
         })
         .eq("firebase_uid", currentUser.uid);
-
       if (supabaseError) {
         throw new Error(`Supabase update error: ${supabaseError.message}`);
       }
-
       setUserEmail(tempEmail);
       setOtpSent(false);
       setIsEmailChanging(false);
@@ -319,8 +281,6 @@ export default function Settings() {
     }
   }, [currentUser, tempEmail, setUserEmail, setShowEditModal]);
 
-  // Edit Profile Modal Component
-  // Handler for Cancel button in modal
   const handleCancelEditProfile = useCallback(() => {
     setShowEditModal(false);
   }, []);
@@ -463,7 +423,6 @@ export default function Settings() {
                     </Text>
                   </TouchableOpacity>
                 )}
-                {/* Re-authentication step */}
                 {isEmailChanging && isReauthenticating && !otpSent && (
                   <View className="mt-2">
                     <Text className="text-gray-700 text-xs mb-2 font-semibold">
@@ -549,7 +508,6 @@ export default function Settings() {
                           if (!reauthValue)
                             throw new Error("Enter your password or OTP");
                           if (reauthMethod === "password") {
-                            // Password re-auth
                             const {
                               EmailAuthProvider,
                               reauthenticateWithCredential,
@@ -563,8 +521,6 @@ export default function Settings() {
                               credential,
                             );
                           } else if (reauthMethod === "email-otp") {
-                            // Email OTP re-auth (send code to old email, then verify)
-                            // For demo: just accept any value (implement actual logic as needed)
                             if (reauthValue.length < 4)
                               throw new Error("Invalid OTP");
                           }
@@ -572,7 +528,6 @@ export default function Settings() {
                           setReauthLoading(false);
                           setReauthValue("");
                           setReauthMethod(null);
-                          // Now allow sending OTP to new email
                         } catch (err) {
                           setReauthError(
                             (err as any)?.message || "Verification failed",
@@ -590,7 +545,6 @@ export default function Settings() {
                     </TouchableOpacity>
                   </View>
                 )}
-                {/* After re-auth, allow sending OTP to new email */}
                 {isEmailChanging && !isReauthenticating && !otpSent && (
                   <View className="mt-2">
                     <Text className="text-gray-500 text-xs mb-2">
@@ -717,6 +671,8 @@ export default function Settings() {
           <TouchableOpacity
             onPress={() => {
               setTempName(userName);
+              setTempEmail(userEmail);
+              setTempTitle(userTitle);
               setEditName(false);
               setShowEditModal(true);
             }}
@@ -792,6 +748,20 @@ export default function Settings() {
           </Text>
 
           <View className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100 mb-4">
+            {/* ── Change Password row (NEW) ── */}
+            <TouchableOpacity
+              className="flex-row items-center justify-between p-4 border-b border-gray-100"
+              onPress={() => router.push("/change-password")}
+              accessibilityRole="button"
+              accessibilityLabel="Change Password"
+            >
+              <View className="flex-row items-center">
+                <Ionicons name="key-outline" size={22} color="#4B7BEC" />
+                <Text className="text-gray-700 ml-3">Change Password</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+            </TouchableOpacity>
+
             <TouchableOpacity className="flex-row items-center justify-between p-4 border-b border-gray-100">
               <View className="flex-row items-center">
                 <Ionicons
