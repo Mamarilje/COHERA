@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -80,7 +80,6 @@ type TaskFormData = {
   description: string;
   priority: 'Low' | 'Medium' | 'High' | '';
   deadline: string;
-  assignedTo: string[];
   files: { name: string; uri: string }[];
 };
 
@@ -100,22 +99,24 @@ export default function GroupDetails() {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
   const [joinCode, setJoinCode] = useState('');
-  const [activeTab, setActiveTab] = useState<'project' | 'meetings' | 'members' | 'progress' | 'calendar'>('project');
-  const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date>(new Date());
+  const [activeTab, setActiveTab] = useState<'project' | 'progress' | 'members'>('project');
   const [showDeadlinePicker, setShowDeadlinePicker] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
   const [showPriorityPicker, setShowPriorityPicker] = useState(false);
   const [selectedDeadlineDate, setSelectedDeadlineDate] = useState<Date>(new Date());
   const [selectedHour, setSelectedHour] = useState(12);
   const [selectedMinute, setSelectedMinute] = useState(0);
   const [selectedAMPM, setSelectedAMPM] = useState<'AM' | 'PM'>('AM');
+  
+  // @mention states
+  const [showMentions, setShowMentions] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const descriptionInputRef = useRef<TextInput>(null);
+  
   const [taskFormData, setTaskFormData] = useState<TaskFormData>({
     title: '',
     description: '',
     priority: '',
     deadline: '',
-    assignedTo: [],
     files: [],
   });
 
@@ -128,7 +129,6 @@ export default function GroupDetails() {
         const groupData = { id: groupDoc.id, ...groupDoc.data() } as Group;
         setGroup(groupData);
 
-        // Fetch members details
         const membersData: Member[] = [];
         for (const memberId of groupData.members) {
           try {
@@ -142,7 +142,6 @@ export default function GroupDetails() {
                 profileImage: userData.profileImage || userData.photoURL || undefined,
               });
             } else {
-              // If user document doesn't exist, add basic info
               membersData.push({
                 uid: memberId,
                 name: memberId,
@@ -150,7 +149,6 @@ export default function GroupDetails() {
               });
             }
           } catch (error) {
-            // Handle permission errors - use basic info
             membersData.push({
               uid: memberId,
               name: memberId,
@@ -160,7 +158,6 @@ export default function GroupDetails() {
         }
         setMembers(membersData);
 
-        // Fetch tasks for this group
         const tasksRef = collection(db, 'tasks');
         const tasksQuery = query(tasksRef, where('groupId', '==', groupId));
         const tasksSnapshot = await getDocs(tasksQuery);
@@ -183,7 +180,6 @@ export default function GroupDetails() {
         });
         setTasks(fetchedTasks);
 
-        // Fetch pending join requests
         const requestsRef = collection(db, 'joinRequests');
         const q = query(
           requestsRef,
@@ -193,7 +189,6 @@ export default function GroupDetails() {
         const requests: JoinRequest[] = [];
         requestsSnapshot.forEach((doc) => {
           const data = doc.data();
-          // Filter by pending status in code
           if (data.status === 'pending') {
             requests.push({
               id: doc.id,
@@ -235,7 +230,6 @@ export default function GroupDetails() {
 
     setIsLoading(true);
     try {
-      // Find group by code
       const groupsRef = collection(db, 'groups');
       const q = query(groupsRef, where('code', '==', joinCode.toUpperCase()));
       const querySnapshot = await getDocs(q);
@@ -249,7 +243,6 @@ export default function GroupDetails() {
       const groupDoc = querySnapshot.docs[0];
       const groupData = groupDoc.data();
 
-      // Check if user is already a member
       if (groupData.members.includes(currentUser?.uid)) {
         Alert.alert('Info', 'You are already a member of this group');
         setShowJoinModal(false);
@@ -257,7 +250,6 @@ export default function GroupDetails() {
         return;
       }
 
-      // Check if there's already a pending request
       const existingRequestQuery = query(
         collection(db, 'joinRequests'),
         where('groupId', '==', groupDoc.id),
@@ -273,7 +265,6 @@ export default function GroupDetails() {
         return;
       }
 
-      // Add join request
       await addDoc(collection(db, 'joinRequests'), {
         groupId: groupDoc.id,
         userId: currentUser?.uid,
@@ -299,18 +290,16 @@ export default function GroupDetails() {
 
   const handleAcceptRequest = async (requestId: string, userId: string) => {
     try {
-      // Add user to group members
       await updateDoc(doc(db, 'groups', groupId as string), {
         members: arrayUnion(userId),
       });
 
-      // Update request status
       await updateDoc(doc(db, 'joinRequests', requestId), {
         status: 'approved',
       });
 
       Alert.alert('Success', 'Member added to group');
-      fetchGroupDetails(); // Refresh data
+      fetchGroupDetails();
     } catch (error) {
       console.error('Error accepting request:', error);
       Alert.alert('Error', 'Failed to accept request');
@@ -323,7 +312,7 @@ export default function GroupDetails() {
         status: 'rejected',
       });
       Alert.alert('Success', 'Request rejected');
-      fetchGroupDetails(); // Refresh data
+      fetchGroupDetails();
     } catch (error) {
       console.error('Error rejecting request:', error);
       Alert.alert('Error', 'Failed to reject request');
@@ -356,58 +345,78 @@ export default function GroupDetails() {
     );
   };
 
-  const handleCreateTask = async (e?: any) => {
-    console.log('=== handleCreateTask START ===');
-    console.log('Task Form Data:', taskFormData);
-    console.log('Group ID:', groupId);
-    console.log('Current User:', currentUser?.uid);
+  const handleDescriptionChange = (text: string) => {
+    setTaskFormData(prev => ({ ...prev, description: text }));
+    
+    const lastAtIndex = text.lastIndexOf('@');
+    if (lastAtIndex !== -1 && lastAtIndex === text.length - 1) {
+      setShowMentions(true);
+      setMentionQuery('');
+    } else if (lastAtIndex !== -1 && lastAtIndex > text.length - 30) {
+      const query = text.substring(lastAtIndex + 1);
+      if (!query.includes(' ')) {
+        setShowMentions(true);
+        setMentionQuery(query);
+      } else {
+        setShowMentions(false);
+      }
+    } else {
+      setShowMentions(false);
+    }
+  };
 
+  const insertMention = (member: Member) => {
+    const beforeMention = taskFormData.description.substring(0, taskFormData.description.lastIndexOf('@'));
+    const mentionText = `@${member.name} `;
+    const newDescription = beforeMention + mentionText;
+    
+    setTaskFormData(prev => ({ ...prev, description: newDescription }));
+    setShowMentions(false);
+    
+    setTimeout(() => {
+      descriptionInputRef.current?.focus();
+    }, 100);
+  };
+
+  const getFilteredMembers = () => {
+    if (!mentionQuery) return members;
+    return members.filter(member => 
+      member.name.toLowerCase().includes(mentionQuery.toLowerCase()) ||
+      member.email.toLowerCase().includes(mentionQuery.toLowerCase())
+    );
+  };
+
+  const handleCreateTask = async () => {
     if (!taskFormData.title.trim()) {
-      console.log('ERROR: No title');
       Alert.alert('Error', 'Please enter a task title');
       return;
     }
 
     if (!taskFormData.priority) {
-      console.log('ERROR: No priority');
       Alert.alert('Error', 'Please select a priority');
       return;
     }
 
     if (!taskFormData.deadline) {
-      console.log('ERROR: No deadline');
       Alert.alert('Error', 'Please select a deadline');
       return;
     }
 
     try {
-      console.log('Validation passed, starting upload...');
       setIsUploadingFiles(true);
       let uploadedFileUrls: string[] = [];
 
-      // Upload files to Supabase Storage (optional)
       if (taskFormData.files.length > 0) {
-        console.log(`Uploading ${taskFormData.files.length} files...`);
-        const uploadPromises = taskFormData.files.map(async (file, index) => {
+        const uploadPromises = taskFormData.files.map(async (file) => {
           try {
-            console.log(`Uploading file ${index + 1}: ${file.name}`);
             const fileName = `${Date.now()}-${file.name}`;
             const folderPath = `tasks/${groupId}/${currentUser?.uid}`;
             const fullPath = `${folderPath}/${fileName}`;
 
-            console.log(`File path: ${fullPath}`);
-            console.log(`File URI: ${file.uri}`);
-
-            // Read the file
-            console.log('Reading file...');
             const response = await fetch(file.uri);
-            console.log('Fetch response status:', response.status);
             const blob = await response.blob();
-            console.log('Blob created:', blob.size, 'bytes');
 
-            // Upload to Supabase
-            console.log(`Uploading to Supabase at: ${fullPath}`);
-            const { data, error } = await supabase.storage
+            const { error } = await supabase.storage
               .from('task-files')
               .upload(fullPath, blob, {
                 cacheControl: '3600',
@@ -419,75 +428,53 @@ export default function GroupDetails() {
               return null;
             }
 
-            console.log('Upload successful, data:', data);
-
-            // Get public URL
-            console.log('Getting public URL...');
             const { data: publicUrl } = supabase.storage
               .from('task-files')
               .getPublicUrl(fullPath);
 
-            console.log('Public URL:', publicUrl?.publicUrl);
             return publicUrl?.publicUrl;
           } catch (error) {
-            console.error(`Error uploading file ${file.name}:`, error);
+            console.error(`Error uploading file:`, error);
             return null;
           }
         });
 
         uploadedFileUrls = (await Promise.all(uploadPromises)).filter((url) => url !== null) as string[];
-        console.log('Upload results:', uploadedFileUrls.length, 'files uploaded');
-
-        // If some files uploaded but not all, warn user but continue
-        if (uploadedFileUrls.length > 0 && uploadedFileUrls.length < taskFormData.files.length) {
-          console.warn(`Only ${uploadedFileUrls.length} out of ${taskFormData.files.length} files uploaded`);
-        }
       }
 
-      // Save task with file URLs to Firestore
-      console.log('Saving task to Firestore...');
       const taskData = {
         groupId: groupId,
         title: taskFormData.title,
         description: taskFormData.description,
         priority: taskFormData.priority,
         deadline: taskFormData.deadline,
-        assignedTo: taskFormData.assignedTo,
+        assignedTo: [],
         ...(uploadedFileUrls.length > 0 && { fileUrls: uploadedFileUrls }),
         ...(uploadedFileUrls.length > 0 && { fileNames: taskFormData.files.slice(0, uploadedFileUrls.length).map((f) => f.name) }),
         completed: false,
         createdBy: currentUser?.uid,
         createdAt: serverTimestamp(),
       };
-      console.log('Task data to save:', taskData);
 
-      const docRef = await addDoc(collection(db, 'tasks'), taskData);
-      console.log('Task created with ID:', docRef.id);
-
-      const successMessage = uploadedFileUrls.length > 0 
-        ? `Task created successfully with ${uploadedFileUrls.length} file(s)`
-        : 'Task created successfully';
-      Alert.alert('Success', successMessage);
+      await addDoc(collection(db, 'tasks'), taskData);
+      
+      Alert.alert('Success', 'Task created successfully');
       
       setTaskFormData({
         title: '',
         description: '',
         priority: '',
         deadline: '',
-        assignedTo: [],
         files: [],
       });
       setShowTaskModal(false);
       setIsUploadingFiles(false);
-      console.log('Fetching group details...');
       fetchGroupDetails();
     } catch (error) {
       console.error('Error creating task:', error);
-      console.error('Error stack:', (error as any)?.stack);
       Alert.alert('Error', `Failed to create task: ${(error as any)?.message}`);
       setIsUploadingFiles(false);
     }
-    console.log('=== handleCreateTask END ===');
   };
 
   const toggleTaskComplete = async (taskId: string, currentStatus: boolean) => {
@@ -513,36 +500,11 @@ export default function GroupDetails() {
     }
   };
 
-  // Navigate to task detail page
   const handleTaskPress = (task: Task) => {
     router.push({
       pathname: '/task/[id]',
       params: { id: task.id }
     });
-  };
-
-  const getTasksForDate = (date: Date) => {
-    return tasks.filter((task) => {
-      const taskDate = new Date(task.deadline);
-      return (
-        taskDate.getDate() === date.getDate() &&
-        taskDate.getMonth() === date.getMonth() &&
-        taskDate.getFullYear() === date.getFullYear()
-      );
-    });
-  };
-
-  const hasTasksOnDate = (date: Date) => {
-    return getTasksForDate(date).length > 0;
-  };
-
-  const toggleMember = (memberId: string) => {
-    setTaskFormData((prev) => ({
-      ...prev,
-      assignedTo: prev.assignedTo.includes(memberId)
-        ? prev.assignedTo.filter((id) => id !== memberId)
-        : [...prev.assignedTo, memberId],
-    }));
   };
 
   const getPriorityColor = (priority: string) => {
@@ -589,15 +551,6 @@ export default function GroupDetails() {
         completionRate: percentage,
       };
     }).sort((a, b) => b.completionRate - a.completionRate);
-  };
-
-  const getSelectedMembersText = () => {
-    if (taskFormData.assignedTo.length === 0) return 'Select members';
-    if (taskFormData.assignedTo.length === 1) {
-      const member = members.find((m) => m.uid === taskFormData.assignedTo[0]);
-      return member?.name || 'Select members';
-    }
-    return `${taskFormData.assignedTo.length} members selected`;
   };
 
   const isAdmin = group?.createdBy === currentUser?.uid;
@@ -647,30 +600,36 @@ export default function GroupDetails() {
         </View>
 
         {/* Tab Navigation */}
-        <View className="flex-row mb-6 bg-white rounded-xl p-1 shadow-sm overflow-x-auto">
-          {(['project', 'meetings', 'progress', 'calendar', 'members'] as const).map((tab) => (
-            <TouchableOpacity
-              key={tab}
-              onPress={() => setActiveTab(tab)}
-              className={`py-3 px-4 rounded-lg ${
-                activeTab === tab ? 'bg-yellow-400' : ''
-              }`}
-            >
-              <Text
-                className={`font-semibold capitalize whitespace-nowrap ${
-                  activeTab === tab ? 'text-white' : 'text-gray-600'
-                }`}
-              >
-                {tab === 'progress' ? 'Stats' : tab}
-              </Text>
-            </TouchableOpacity>
-          ))}
+        <View className="flex-row mb-6 bg-white rounded-xl p-1 shadow-sm">
+          <TouchableOpacity
+            onPress={() => setActiveTab('project')}
+            className={`flex-1 py-3 rounded-lg ${activeTab === 'project' ? 'bg-yellow-400' : ''}`}
+          >
+            <Text className={`text-center font-semibold ${activeTab === 'project' ? 'text-white' : 'text-gray-600'}`}>
+              Project
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setActiveTab('progress')}
+            className={`flex-1 py-3 rounded-lg ${activeTab === 'progress' ? 'bg-yellow-400' : ''}`}
+          >
+            <Text className={`text-center font-semibold ${activeTab === 'progress' ? 'text-white' : 'text-gray-600'}`}>
+              Progress
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setActiveTab('members')}
+            className={`flex-1 py-3 rounded-lg ${activeTab === 'members' ? 'bg-yellow-400' : ''}`}
+          >
+            <Text className={`text-center font-semibold ${activeTab === 'members' ? 'text-white' : 'text-gray-600'}`}>
+              Members
+            </Text>
+          </TouchableOpacity>
         </View>
 
         {/* Project Tab Content */}
         {activeTab === 'project' && (
           <View>
-            {/* Create Task Button */}
             <TouchableOpacity 
               className="bg-yellow-400 rounded-xl p-4 mb-6 flex-row items-center justify-center"
               onPress={() => setShowTaskModal(true)}
@@ -679,7 +638,6 @@ export default function GroupDetails() {
               <Text className="text-white font-semibold ml-2">Create Task</Text>
             </TouchableOpacity>
 
-            {/* Project Deadlines */}
             <View className="flex-row justify-between items-center mb-4">
               <Text className="font-semibold text-gray-800 text-lg">Tasks ({tasks.length})</Text>
             </View>
@@ -720,7 +678,9 @@ export default function GroupDetails() {
                               {task.title}
                             </Text>
                             {task.description ? (
-                              <Text className="text-xs text-gray-500 mt-1">{task.description}</Text>
+                              <Text className="text-xs text-gray-500 mt-1" numberOfLines={2}>
+                                {task.description}
+                              </Text>
                             ) : null}
                             <View className="flex-row items-center gap-2 mt-2">
                               <Ionicons name="calendar-outline" size={12} color="#9CA3AF" />
@@ -756,43 +716,9 @@ export default function GroupDetails() {
           </View>
         )}
 
-        {/* Meetings Tab Content */}
-        {activeTab === 'meetings' && (
-          <View>
-            <TouchableOpacity 
-              className="bg-orange-500 rounded-xl p-3 mb-4 flex-row items-center justify-center"
-              onPress={() => Alert.alert('Coming Soon', 'Meeting scheduling will be available soon!')}
-            >
-              <Ionicons name="add" size={20} color="white" />
-              <Text className="text-white font-semibold ml-2">Schedule Meeting</Text>
-            </TouchableOpacity>
-
-            <View className="bg-white rounded-xl p-4 shadow-sm">
-              <View className="flex-row justify-between items-start">
-                <View>
-                  <Text className="font-semibold text-gray-800">Team Sync</Text>
-                  <Text className="text-sm text-gray-500 mt-1">Tomorrow, 10:00AM • 1 hour</Text>
-                </View>
-                <Ionicons name="videocam-outline" size={24} color="#F59E0B" />
-              </View>
-            </View>
-
-            <View className="bg-white rounded-xl p-4 shadow-sm mt-3">
-              <View className="flex-row justify-between items-start">
-                <View>
-                  <Text className="font-semibold text-gray-800">Project Review</Text>
-                  <Text className="text-sm text-gray-500 mt-1">Feb 10, 2:00PM • 30 min</Text>
-                </View>
-                <Ionicons name="people-outline" size={24} color="#F59E0B" />
-              </View>
-            </View>
-          </View>
-        )}
-
         {/* Progress Tab Content */}
         {activeTab === 'progress' && (
           <View>
-            {/* Task Completion Overview */}
             <View className="bg-white rounded-xl p-6 mb-6 shadow-sm">
               <Text className="text-lg font-bold text-gray-800 mb-4">Task Overview</Text>
               <View className="flex-row justify-around">
@@ -815,14 +741,13 @@ export default function GroupDetails() {
               </View>
             </View>
 
-            {/* Member Contributions */}
             <View className="bg-white rounded-xl p-4 shadow-sm">
               <Text className="text-lg font-bold text-gray-800 mb-4">Member Performance</Text>
               {getMemberContributions().length === 0 ? (
                 <Text className="text-gray-500 text-center py-4">No members with assigned tasks</Text>
               ) : (
                 <View className="space-y-3">
-                  {getMemberContributions().map((member, index) => (
+                  {getMemberContributions().map((member) => (
                     <View key={member.uid} className="border-b border-gray-100 pb-3">
                       <View className="flex-row items-center justify-between mb-2">
                         <View className="flex-row items-center flex-1">
@@ -857,184 +782,9 @@ export default function GroupDetails() {
           </View>
         )}
 
-        {/* Calendar Tab Content */}
-        {activeTab === 'calendar' && (
-          <View>
-            <View className="bg-white rounded-xl p-6 shadow-sm mb-6">
-              {/* Calendar Header */}
-              <View className="flex-row justify-between items-center mb-6">
-                <TouchableOpacity
-                  onPress={() => {
-                    const newDate = new Date(selectedCalendarDate);
-                    newDate.setMonth(newDate.getMonth() - 1);
-                    setSelectedCalendarDate(newDate);
-                  }}
-                >
-                  <Ionicons name="chevron-back" size={24} color="#EAB308" />
-                </TouchableOpacity>
-                <Text className="text-lg font-semibold text-gray-900">
-                  {selectedCalendarDate.toLocaleString('en-US', { month: 'long', year: 'numeric' })}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => {
-                    const newDate = new Date(selectedCalendarDate);
-                    newDate.setMonth(newDate.getMonth() + 1);
-                    setSelectedCalendarDate(newDate);
-                  }}
-                >
-                  <Ionicons name="chevron-forward" size={24} color="#EAB308" />
-                </TouchableOpacity>
-              </View>
-
-              {/* Weekday Headers */}
-              <View className="flex-row justify-between mb-3">
-                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
-                  <Text key={day} className="text-xs font-semibold text-gray-500 w-12 text-center">
-                    {day}
-                  </Text>
-                ))}
-              </View>
-
-              {/* Calendar Days */}
-              <View>
-                {(() => {
-                  const year = selectedCalendarDate.getFullYear();
-                  const month = selectedCalendarDate.getMonth();
-                  const firstDay = new Date(year, month, 1).getDay();
-                  const daysInMonth = new Date(year, month + 1, 0).getDate();
-                  const days: (number | null)[] = Array(firstDay).fill(null);
-                  for (let i = 1; i <= daysInMonth; i++) days.push(i);
-
-                  return (
-                    <View className="flex-row flex-wrap">
-                      {days.map((day, index) => {
-                        const dateObj = day ? new Date(year, month, day) : null;
-                        const hasTasks = dateObj ? hasTasksOnDate(dateObj) : false;
-                        const isSelected =
-                          dateObj &&
-                          dateObj.getDate() === new Date().getDate() &&
-                          dateObj.getMonth() === new Date().getMonth() &&
-                          dateObj.getFullYear() === new Date().getFullYear();
-
-                        return (
-                          <TouchableOpacity
-                            key={index}
-                            onPress={() => {
-                              if (day) setSelectedCalendarDate(new Date(year, month, day));
-                            }}
-                            disabled={!day}
-                            className={`w-1/7 aspect-square rounded-lg mb-2 items-center justify-center ${
-                              !day ? 'bg-transparent' : 'bg-gray-50'
-                            } ${
-                              isSelected ? 'bg-yellow-400' : ''
-                            } ${
-                              hasTasks && !isSelected ? 'border-2 border-yellow-400' : ''
-                            }`}
-                          >
-                            {day && (
-                              <>
-                                <Text
-                                  className={`font-semibold ${
-                                    isSelected ? 'text-white' : 'text-gray-800'
-                                  }`}
-                                >
-                                  {day}
-                                </Text>
-                                {hasTasks && !isSelected && (
-                                  <View className="w-1.5 h-1.5 bg-yellow-400 rounded-full mt-1" />
-                                )}
-                              </>
-                            )}
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  );
-                })()}
-              </View>
-            </View>
-
-            {/* Tasks for Selected Date */}
-            <View>
-              <Text className="font-semibold text-gray-800 text-lg mb-4">
-                Tasks for {selectedCalendarDate.toLocaleDateString('en-US', {
-                  weekday: 'long',
-                  month: 'short',
-                  day: 'numeric',
-                })}
-              </Text>
-
-              {getTasksForDate(selectedCalendarDate).length === 0 ? (
-                <View className="bg-white rounded-xl p-8 shadow-sm items-center">
-                  <Ionicons name="calendar-outline" size={40} color="#D1D5DB" />
-                  <Text className="text-gray-500 mt-3">No tasks on this date</Text>
-                </View>
-              ) : (
-                <View className="space-y-3 mb-6">
-                  {getTasksForDate(selectedCalendarDate).map((task) => (
-                    <TouchableOpacity
-                      key={task.id}
-                      onPress={() => handleTaskPress(task)}
-                      activeOpacity={0.7}
-                    >
-                      <View
-                        className={`bg-white rounded-xl p-4 shadow-sm border-l-4 ${getPriorityColor(task.priority)}`}
-                      >
-                        <View className="flex-row items-start justify-between">
-                          <View className="flex-row items-start flex-1">
-                            <TouchableOpacity 
-                              onPress={(e) => {
-                                e.stopPropagation();
-                                toggleTaskComplete(task.id, task.completed);
-                              }}
-                              className="mt-1"
-                            >
-                              <Ionicons 
-                                name={task.completed ? 'checkbox' : 'checkbox-outline'} 
-                                size={20} 
-                                color={task.completed ? '#22C55E' : '#9CA3AF'} 
-                              />
-                            </TouchableOpacity>
-                            <View className="ml-3 flex-1">
-                              <Text className={`font-semibold ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
-                                {task.title}
-                              </Text>
-                              {task.description ? (
-                                <Text className="text-xs text-gray-500 mt-1">{task.description}</Text>
-                              ) : null}
-                              <Text className="text-xs text-gray-600 mt-2">Priority: {task.priority}</Text>
-                            </View>
-                          </View>
-                          <TouchableOpacity
-                            onPress={(e) => {
-                              e.stopPropagation();
-                              Alert.alert('Delete Task', 'Are you sure?', [
-                                { text: 'Cancel', style: 'cancel' },
-                                {
-                                  text: 'Delete',
-                                  style: 'destructive',
-                                  onPress: () => deleteTask(task.id),
-                                },
-                              ]);
-                            }}
-                            className="ml-2"
-                          >
-                            <Ionicons name="trash-outline" size={20} color="#EF4444" />
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-            </View>
-          </View>
-        )}
-
         {/* Members Tab Content */}
         {activeTab === 'members' && (
           <View>
-            {/* Join Requests (Admin Only) */}
             {isAdmin && joinRequests.length > 0 && (
               <View className="mb-6">
                 <Text className="font-semibold text-gray-800 mb-3">
@@ -1067,7 +817,6 @@ export default function GroupDetails() {
               </View>
             )}
 
-            {/* Members List */}
             <Text className="font-semibold text-gray-800 mb-3">Members ({members.length})</Text>
             {members.map((member) => (
               <View key={member.uid} className="bg-white rounded-xl p-4 mb-3 shadow-sm">
@@ -1106,7 +855,6 @@ export default function GroupDetails() {
               </View>
             ))}
 
-            {/* Invite Code */}
             <View className="bg-white rounded-xl p-4 mt-4 shadow-sm">
               <Text className="text-gray-600 text-sm mb-2">Invite Code</Text>
               <View className="flex-row justify-between items-center">
@@ -1186,7 +934,6 @@ export default function GroupDetails() {
       >
         <View className="flex-1 bg-black/50 justify-end">
           <View className="bg-white rounded-t-3xl p-6 max-h-[90%]">
-            {/* Modal Header */}
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-xl font-bold text-gray-800">Create New Task</Text>
               <TouchableOpacity onPress={() => setShowTaskModal(false)}>
@@ -1209,19 +956,101 @@ export default function GroupDetails() {
                 />
               </View>
 
-              {/* Description Input */}
-              <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Description</Text>
+              {/* Description Input with @mention */}
+              <View className="mb-4 relative">
+                <Text className="text-sm font-semibold text-gray-700 mb-2">
+                  Description (Use @ to mention team members)
+                </Text>
                 <TextInput
-                  className="border border-gray-300 rounded-lg p-3 h-24"
-                  placeholder="Enter task description"
+                  ref={descriptionInputRef}
+                  className="border border-gray-300 rounded-lg p-3 h-32"
+                  placeholder="Enter task description... Use @ to mention someone"
                   value={taskFormData.description}
-                  onChangeText={(text) =>
-                    setTaskFormData((prev) => ({ ...prev, description: text }))
-                  }
+                  onChangeText={handleDescriptionChange}
                   multiline
                   placeholderTextColor="#9CA3AF"
                 />
+                
+                {/* Mention Suggestions Modal */}
+                {showMentions && members.length > 0 && (
+                  <View className="absolute top-24 left-0 right-0 bg-white rounded-xl shadow-lg border border-gray-100 max-h-64 z-10">
+                    <FlatList
+                      data={members.filter(m => !mentionQuery || m.name.toLowerCase().includes(mentionQuery.toLowerCase()) || m.email.toLowerCase().includes(mentionQuery.toLowerCase()))}
+                      keyExtractor={(item) => item.uid}
+                      ListHeaderComponent={
+                        (!mentionQuery || 'everyone'.includes(mentionQuery.toLowerCase())) ? (
+                          <TouchableOpacity
+                            onPress={() => {
+                              const beforeMention = taskFormData.description.substring(0, taskFormData.description.lastIndexOf('@'));
+                              const mentionText = `@everyone `;
+                              const newDescription = beforeMention + mentionText;
+                              setTaskFormData(prev => ({ ...prev, description: newDescription }));
+                              setShowMentions(false);
+                              setTimeout(() => {
+                                descriptionInputRef.current?.focus();
+                              }, 100);
+                            }}
+                            className="flex-row items-center px-4 py-3 border-b border-gray-50 active:bg-gray-50"
+                          >
+                            <View className="w-10 h-10 bg-purple-100 rounded-full items-center justify-center mr-3">
+                              <Ionicons name="people" size={20} color="#9333EA" />
+                            </View>
+                            <View className="flex-1">
+                              <Text className="font-semibold text-gray-800 text-base">
+                                Mention everyone in this chat
+                              </Text>
+                              <Text className="text-xs text-gray-400 mt-0.5">
+                                Notify all members
+                              </Text>
+                            </View>
+                            <View className="w-8 h-8 bg-purple-100 rounded-full items-center justify-center ml-2">
+                              <Ionicons name="notifications-outline" size={16} color="#9333EA" />
+                            </View>
+                          </TouchableOpacity>
+                        ) : null
+                      }
+                      renderItem={({ item }) => (
+                        <TouchableOpacity
+                          onPress={() => insertMention(item)}
+                          className="flex-row items-center px-4 py-3 border-b border-gray-50 active:bg-gray-50"
+                        >
+                          {/* Avatar */}
+                          {item.profileImage ? (
+                            <Image source={{ uri: item.profileImage }} className="w-10 h-10 rounded-full mr-3" />
+                          ) : (
+                            <View className="w-10 h-10 bg-gradient-to-br from-yellow-400 to-amber-500 rounded-full items-center justify-center mr-3">
+                              <Text className="text-white font-bold text-base">
+                                {item.name.charAt(0).toUpperCase()}
+                              </Text>
+                            </View>
+                          )}
+                          
+                          {/* Name and Email */}
+                          <View className="flex-1">
+                            <Text className="font-semibold text-gray-800 text-base">
+                              {item.name}
+                            </Text>
+                            {item.email && (
+                              <Text className="text-xs text-gray-400 mt-0.5" numberOfLines={1}>
+                                {item.email}
+                              </Text>
+                            )}
+                          </View>
+                          
+                          {/* @ Icon */}
+                          <View className="w-8 h-8 bg-yellow-100 rounded-full items-center justify-center ml-2">
+                            <Ionicons name="at" size={16} color="#EAB308" />
+                          </View>
+                        </TouchableOpacity>
+                      )}
+                      ListEmptyComponent={
+                        <View className="p-6 items-center">
+                          <Text className="text-gray-400">No members found</Text>
+                        </View>
+                      }
+                    />
+                  </View>
+                )}
               </View>
 
               {/* File Upload */}
@@ -1230,7 +1059,6 @@ export default function GroupDetails() {
                   <Text className="text-sm font-semibold text-gray-700">
                     Files ({taskFormData.files.length})
                   </Text>
-                  <Text className="text-xs text-gray-500">Min: 5 files</Text>
                 </View>
                 <TouchableOpacity
                   onPress={async () => {
@@ -1266,7 +1094,6 @@ export default function GroupDetails() {
                   </Text>
                 </TouchableOpacity>
 
-                {/* Selected Files List */}
                 {taskFormData.files.length > 0 && (
                   <View className="bg-gray-50 rounded-lg p-3 gap-2">
                     {taskFormData.files.map((file, index) => (
@@ -1330,7 +1157,6 @@ export default function GroupDetails() {
                     
                     setSelectedDeadlineDate(dateToUse);
                     
-                    // Extract hour, minute, and AM/PM from the date
                     let hours = dateToUse.getHours();
                     const minutes = dateToUse.getMinutes();
                     const isPM = hours >= 12;
@@ -1359,37 +1185,6 @@ export default function GroupDetails() {
                     <Ionicons name="calendar-outline" size={20} color="#9CA3AF" />
                   </View>
                 </TouchableOpacity>
-              </View>
-
-              {/* Assign To */}
-              <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Assign To ({taskFormData.assignedTo.length})</Text>
-                <View className="border border-gray-300 rounded-lg p-3 max-h-40">
-                  <FlatList
-                    data={members}
-                    scrollEnabled={false}
-                    renderItem={({ item: member }) => (
-                      <TouchableOpacity
-                        onPress={() => toggleMember(member.uid)}
-                        className="flex-row items-center py-2"
-                      >
-                        <View
-                          className={`w-5 h-5 rounded border-2 mr-3 items-center justify-center ${
-                            taskFormData.assignedTo.includes(member.uid)
-                              ? 'bg-yellow-400 border-yellow-400'
-                              : 'border-gray-300'
-                          }`}
-                        >
-                          {taskFormData.assignedTo.includes(member.uid) && (
-                            <Ionicons name="checkmark" size={14} color="white" />
-                          )}
-                        </View>
-                        <Text className="text-gray-700">{member.name}</Text>
-                      </TouchableOpacity>
-                    )}
-                    keyExtractor={(item) => item.uid}
-                  />
-                </View>
               </View>
 
               {/* Action Buttons */}
@@ -1425,7 +1220,6 @@ export default function GroupDetails() {
       >
         <View className="flex-1 bg-black/50 justify-end">
           <View className="bg-white rounded-t-2xl pb-6">
-            {/* Header */}
             <View className="flex-row justify-between items-center p-4 border-b border-gray-200">
               <Text className="text-lg font-semibold text-gray-900">Select Deadline</Text>
               <TouchableOpacity onPress={() => setShowDeadlinePicker(false)}>
@@ -1433,9 +1227,7 @@ export default function GroupDetails() {
               </TouchableOpacity>
             </View>
 
-            {/* Calendar View */}
             <View className="p-6">
-              {/* Calendar Header with Month/Year */}
               <View className="mb-6">
                 <View className="flex-row justify-between items-center mb-4">
                   <TouchableOpacity
@@ -1461,7 +1253,6 @@ export default function GroupDetails() {
                   </TouchableOpacity>
                 </View>
 
-                {/* Weekday Headers */}
                 <View className="flex-row justify-between mb-2">
                   {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
                     <Text key={day} className="text-xs font-semibold text-gray-500 w-10 text-center">
@@ -1470,7 +1261,6 @@ export default function GroupDetails() {
                   ))}
                 </View>
 
-                {/* Calendar Days */}
                 <View>
                   {(() => {
                     const year = selectedDeadlineDate.getFullYear();
@@ -1522,26 +1312,19 @@ export default function GroupDetails() {
                 </View>
               </View>
 
-              {/* Time Selector */}
               <View className="border-t border-gray-200 pt-6">
                 <Text className="text-sm font-semibold text-gray-700 mb-4">Time:</Text>
                 <View className="flex-row gap-4 items-center">
-                  {/* Hour Dropdown */}
                   <View className="flex-1">
                     <Text className="text-xs text-gray-600 mb-2">Hour (1-12)</Text>
-                    <ScrollView
-                      showsVerticalScrollIndicator={true}
-                      className="border border-gray-300 rounded-lg h-40"
-                    >
+                    <ScrollView showsVerticalScrollIndicator={true} className="border border-gray-300 rounded-lg h-40">
                       <View>
                         {Array.from({ length: 12 }, (_, i) => i + 1).map((hour) => (
                           <TouchableOpacity
                             key={hour}
                             onPress={() => setSelectedHour(hour)}
                             className={`px-4 py-3 border-b border-gray-100 ${
-                              selectedHour === hour
-                                ? 'bg-yellow-400'
-                                : 'bg-white'
+                              selectedHour === hour ? 'bg-yellow-400' : 'bg-white'
                             }`}
                           >
                             <Text className={`font-semibold ${selectedHour === hour ? 'text-white' : 'text-gray-700'}`}>
@@ -1553,22 +1336,16 @@ export default function GroupDetails() {
                     </ScrollView>
                   </View>
 
-                  {/* Minute Dropdown */}
                   <View className="flex-1">
                     <Text className="text-xs text-gray-600 mb-2">Minute</Text>
-                    <ScrollView
-                      showsVerticalScrollIndicator={true}
-                      className="border border-gray-300 rounded-lg h-40"
-                    >
+                    <ScrollView showsVerticalScrollIndicator={true} className="border border-gray-300 rounded-lg h-40">
                       <View>
                         {Array.from({ length: 60 }, (_, i) => i).map((minute) => (
                           <TouchableOpacity
                             key={minute}
                             onPress={() => setSelectedMinute(minute)}
                             className={`px-4 py-2 border-b border-gray-100 ${
-                              selectedMinute === minute
-                                ? 'bg-yellow-400'
-                                : 'bg-white'
+                              selectedMinute === minute ? 'bg-yellow-400' : 'bg-white'
                             }`}
                           >
                             <Text className={`font-semibold text-sm ${selectedMinute === minute ? 'text-white' : 'text-gray-700'}`}>
@@ -1580,7 +1357,6 @@ export default function GroupDetails() {
                     </ScrollView>
                   </View>
 
-                  {/* AM/PM Toggle */}
                   <View className="flex-1">
                     <Text className="text-xs text-gray-600 mb-2">Period</Text>
                     <View className="flex-row gap-2 border border-gray-300 rounded-lg p-1 bg-white">
@@ -1589,9 +1365,7 @@ export default function GroupDetails() {
                           key={period}
                           onPress={() => setSelectedAMPM(period)}
                           className={`flex-1 py-2 rounded ${
-                            selectedAMPM === period
-                              ? 'bg-yellow-400'
-                              : 'bg-gray-50'
+                            selectedAMPM === period ? 'bg-yellow-400' : 'bg-gray-50'
                           }`}
                         >
                           <Text className={`text-center font-semibold ${selectedAMPM === period ? 'text-white' : 'text-gray-700'}`}>
@@ -1605,7 +1379,6 @@ export default function GroupDetails() {
               </View>
             </View>
 
-            {/* Action Buttons */}
             <View className="flex-row gap-3 px-6 border-t border-gray-200 pt-4">
               <TouchableOpacity
                 onPress={() => setShowDeadlinePicker(false)}
@@ -1615,7 +1388,6 @@ export default function GroupDetails() {
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => {
-                  // Convert 12-hour format to 24-hour format
                   let hours24 = selectedHour;
                   if (selectedAMPM === 'PM' && selectedHour !== 12) {
                     hours24 = selectedHour + 12;
@@ -1649,7 +1421,6 @@ export default function GroupDetails() {
       >
         <View className="flex-1 bg-black/50 justify-end">
           <View className="bg-white rounded-t-2xl pb-6">
-            {/* Header */}
             <View className="flex-row justify-between items-center p-4 border-b border-gray-200">
               <Text className="text-lg font-semibold text-gray-900">Select Priority</Text>
               <TouchableOpacity onPress={() => setShowPriorityPicker(false)}>
@@ -1657,7 +1428,6 @@ export default function GroupDetails() {
               </TouchableOpacity>
             </View>
 
-            {/* Priority Options */}
             <View className="px-6 pt-4 gap-3">
               {(['Low', 'Medium', 'High'] as const).map((level) => (
                 <TouchableOpacity
@@ -1699,7 +1469,6 @@ export default function GroupDetails() {
               ))}
             </View>
 
-            {/* Close Button */}
             <View className="px-6 pt-6 border-t border-gray-200">
               <TouchableOpacity
                 onPress={() => setShowPriorityPicker(false)}
@@ -1711,42 +1480,6 @@ export default function GroupDetails() {
           </View>
         </View>
       </Modal>
-
-      {/* Native Date Picker - Only render on iOS/Android */}
-      {showDatePicker && Platform.OS !== 'web' && (
-        <DateTimePicker
-          value={selectedDeadlineDate}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(event, date) => {
-            if (Platform.OS === 'android') {
-              setShowDatePicker(false);
-            }
-            if (date) {
-              setSelectedDeadlineDate(date);
-            }
-          }}
-        />
-      )}
-
-      {/* Native Time Picker - Only render on iOS/Android */}
-      {showTimePicker && Platform.OS !== 'web' && (
-        <DateTimePicker
-          value={selectedDeadlineDate}
-          mode="time"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(event, date) => {
-            if (Platform.OS === 'android') {
-              setShowTimePicker(false);
-            }
-            if (date) {
-              setSelectedDeadlineDate(date);
-            }
-          }}
-        />
-      )}
-
-
     </ScrollView>
   );
 }

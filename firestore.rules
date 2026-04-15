@@ -1,7 +1,7 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // User documents - all authenticated users can read user profiles, only own write
+    // User documents
     match /users/{userId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == userId;
@@ -9,32 +9,32 @@ service cloud.firestore {
 
     // Groups collection
     match /groups/{groupId} {
-      // Allow all authenticated users to read groups
       allow read: if request.auth != null;
-      
-      // Allow creating groups
-      allow create: if request.auth != null && 
-                      request.auth.uid == request.resource.data.createdBy;
-      
-      // Allow updating/deleting groups created by user
+      allow create: if request.auth != null;
       allow update, delete: if request.auth != null && 
                              request.auth.uid == resource.data.createdBy;
     }
 
-    // Tasks collection
+    // Tasks collection - Updated
     match /tasks/{taskId} {
-      // Allow reading tasks from groups user is member of
-      allow read: if request.auth != null;
-      // Allow creating/updating/deleting own tasks
-      allow create, update, delete: if request.auth != null && 
-                                      request.auth.uid == request.resource.data.createdBy;
+      allow read: if request.auth != null; // Allow authenticated users to read tasks
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null && 
+                              (request.auth.uid == resource.data.createdBy || resource.data.createdBy == null);
     }
 
-    // Join requests collection
+    // Task Comments - Updated
+    match /taskComments/{commentId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null && 
+                              (request.auth.uid == resource.data.userId || resource.data.userId == null);
+    }
+
+    // Join requests
     match /joinRequests/{requestId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null && 
-                      request.auth.uid == request.resource.data.userId;
+      allow create: if request.auth != null;
       allow update: if request.auth != null;
     }
 

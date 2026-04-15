@@ -36,10 +36,14 @@ type Group = {
 type Task = {
   id: string;
   title: string;
+  description: string;
   dueTime: string;
+  dueDate: string;
   group: string;
+  groupId: string;
   completed: boolean;
-  dueDate?: string;
+  priority: string;
+  createdAt: any;
 };
 
 export default function Home() {
@@ -51,7 +55,13 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [createdTodayTasks, setCreatedTodayTasks] = useState<Task[]>([]);
+  const [dueTodayTasks, setDueTodayTasks] = useState<Task[]>([]);
+  const [taskStats, setTaskStats] = useState({
+    todo: 0,
+    inProgress: 0,
+    completed: 0
+  });
 
   const getIconForCategory = (category: string) => {
     switch (category?.toLowerCase()) {
@@ -95,18 +105,24 @@ export default function Home() {
       const querySnapshot = await getDocs(q);
       
       const fetchedGroups: Group[] = [];
-      querySnapshot.forEach((doc) => {
+      for (const doc of querySnapshot.docs) {
         const data = doc.data();
+        
+        // Count tasks for this group
+        const tasksRef = collection(db, 'tasks');
+        const tasksQuery = query(tasksRef, where('groupId', '==', doc.id));
+        const tasksSnapshot = await getDocs(tasksQuery);
+        
         fetchedGroups.push({
           id: doc.id,
           name: data.name,
           icon: getIconForCategory(data.category),
-          taskCount: data.tasks?.length || 0,
+          taskCount: tasksSnapshot.size,
           category: data.category,
           code: data.code,
           members: data.members || [],
         });
-      });
+      }
       
       setGroups(fetchedGroups);
     } catch (error) {
@@ -114,87 +130,89 @@ export default function Home() {
     }
   };
 
-  const fetchTodayTasks = async () => {
+  const fetchTasks = async () => {
     if (!user) return;
 
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const tasksRef = collection(db, 'tasks');
-      const q = query(
-        tasksRef, 
-        where('userId', '==', user.uid),
-        where('dueDate', '==', today),
-        orderBy('dueTime', 'asc'),
-        limit(5)
-      );
+      // First, get all groups the user is a member of
+      const groupsRef = collection(db, 'groups');
+      const groupsQuery = query(groupsRef, where('members', 'array-contains', user.uid));
+      const groupsSnapshot = await getDocs(groupsQuery);
       
-      const querySnapshot = await getDocs(q);
-      const fetchedTasks: Task[] = [];
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        fetchedTasks.push({
-          id: doc.id,
-          title: data.title,
-          dueTime: data.dueTime || 'No time set',
-          group: data.groupName || 'General',
-          completed: data.completed || false,
-        });
+      const userGroupIds: string[] = [];
+      const groupNames: { [key: string]: string } = {};
+      
+      groupsSnapshot.forEach((doc) => {
+        userGroupIds.push(doc.id);
+        groupNames[doc.id] = doc.data().name;
       });
       
-      if (fetchedTasks.length > 0) {
-        setTasks(fetchedTasks);
-      } else {
-        // Sample tasks for demo
-        setTasks([
-          {
-            id: '1',
-            title: 'Complete Proposal',
-            dueTime: '2:30PM',
-            group: 'School',
-            completed: false,
-          },
-          {
-            id: '2',
-            title: 'Review Design',
-            dueTime: '5:00PM',
-            group: 'Work',
-            completed: false,
-          },
-          {
-            id: '3',
-            title: 'Team Meeting',
-            dueTime: '10:00AM',
-            group: 'Work',
-            completed: true,
-          },
-        ]);
+      if (userGroupIds.length === 0) {
+        setCreatedTodayTasks([]);
+        setDueTodayTasks([]);
+        setTaskStats({ todo: 0, inProgress: 0, completed: 0 });
+        return;
       }
+      
+      // Fetch all tasks from user's groups
+      const tasksRef = collection(db, 'tasks');
+      const allTasks: Task[] = [];
+      
+      for (const groupId of userGroupIds) {
+        const tasksQuery = query(tasksRef, where('groupId', '==', groupId));
+        const tasksSnapshot = await getDocs(tasksQuery);
+        
+        tasksSnapshot.forEach((doc) => {
+          const data = doc.data();
+          allTasks.push({
+            id: doc.id,
+            title: data.title || '',
+            description: data.description || '',
+            dueTime: data.deadline ? new Date(data.deadline).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : 'No time set',
+            dueDate: data.deadline || '',
+            group: groupNames[groupId] || 'Unknown',
+            groupId: groupId,
+            completed: data.completed || false,
+            priority: data.priority || 'Medium',
+            createdAt: data.createdAt,
+          });
+        });
+      }
+      
+      // Get today's date range (start to end of day)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayStart = today.toISOString();
+      const todayEnd = new Date(today);
+      todayEnd.setHours(23, 59, 59, 999);
+      const todayEndStr = todayEnd.toISOString();
+      
+      // Filter tasks created today
+      const createdToday = allTasks.filter(task => {
+        if (!task.createdAt) return false;
+        const createdAt = task.createdAt.toDate ? task.createdAt.toDate() : new Date(task.createdAt);
+        return createdAt >= today && createdAt <= todayEnd;
+      });
+      
+      // Filter tasks due today
+      const dueToday = allTasks.filter(task => {
+        if (!task.dueDate) return false;
+        const dueDate = new Date(task.dueDate);
+        return dueDate >= today && dueDate <= todayEnd && !task.completed;
+      });
+      
+      setCreatedTodayTasks(createdToday);
+      setDueTodayTasks(dueToday);
+      
+      // Calculate task statistics
+      const todo = allTasks.filter(task => !task.completed).length;
+      const completed = allTasks.filter(task => task.completed).length;
+      const inProgress = 0; // You can add an 'inProgress' status to tasks if needed
+      
+      setTaskStats({ todo, inProgress, completed });
+      
     } catch (error) {
       console.error('Error fetching tasks:', error);
-      // Set sample tasks for demo if no tasks exist
-      setTasks([
-        {
-          id: '1',
-          title: 'Complete Proposal',
-          dueTime: '2:30PM',
-          group: 'School',
-          completed: false,
-        },
-        {
-          id: '2',
-          title: 'Review Design',
-          dueTime: '5:00PM',
-          group: 'Work',
-          completed: false,
-        },
-        {
-          id: '3',
-          title: 'Team Meeting',
-          dueTime: '10:00AM',
-          group: 'Work',
-          completed: true,
-        },
-      ]);
     }
   };
 
@@ -203,7 +221,7 @@ export default function Home() {
     await Promise.all([
       fetchUserData(),
       fetchGroups(),
-      fetchTodayTasks(),
+      fetchTasks(),
     ]);
     setIsLoading(false);
     setRefreshing(false);
@@ -241,11 +259,12 @@ export default function Home() {
     router.push('/all-groups' as any);
   };
 
-  const toDoCount = tasks.filter(t => !t.completed).length;
-  const completedCount = tasks.filter(t => t.completed).length;
-  const inProgressCount = 0;
+  const toggleTaskComplete = async (taskId: string, currentStatus: boolean) => {
+    // This would update the task completion status in Firestore
+    // For now, we'll just refresh the data
+    await fetchTasks();
+  };
 
-  // Fixed: This should show loading when isLoading is true, not false
   if (isLoading) {
     return (
       <View className="flex-1 bg-white items-center justify-center">
@@ -277,7 +296,7 @@ export default function Home() {
         {/* GREETING */}
         <Text className="text-3xl font-bold text-gray-800">Hello, {userName}!</Text>
         <Text className="text-gray-500 text-base mb-6">
-          You have {toDoCount + inProgressCount} tasks today.
+          You have {taskStats.todo} tasks to complete.
         </Text>
 
         {/* TASK OVERVIEW CARD */}
@@ -288,15 +307,15 @@ export default function Home() {
           </View>
           <View className="flex-row justify-between">
             <View className="bg-yellow-300 rounded-xl py-4 items-center flex-1 mx-1">
-              <Text className="text-2xl font-bold text-white">{toDoCount}</Text>
+              <Text className="text-2xl font-bold text-white">{taskStats.todo}</Text>
               <Text className="text-white text-xs font-medium">To Do</Text>
             </View>
             <View className="bg-yellow-300 rounded-xl py-4 items-center flex-1 mx-1">
-              <Text className="text-2xl font-bold text-white">{inProgressCount}</Text>
+              <Text className="text-2xl font-bold text-white">{taskStats.inProgress}</Text>
               <Text className="text-white text-xs font-medium">In Progress</Text>
             </View>
             <View className="bg-yellow-300 rounded-xl py-4 items-center flex-1 mx-1">
-              <Text className="text-2xl font-bold text-white">{completedCount}</Text>
+              <Text className="text-2xl font-bold text-white">{taskStats.completed}</Text>
               <Text className="text-white text-xs font-medium">Completed</Text>
             </View>
           </View>
@@ -350,14 +369,13 @@ export default function Home() {
         {/* TODAY'S TASKS */}
         <View className="flex-row justify-between items-center mb-4">
           <Text className="font-semibold text-gray-800 text-lg">Today's Tasks</Text>
-          {tasks.length > 0 && (
-            <Text className="text-gray-400 text-xs">{tasks.length} tasks</Text>
-          )}
         </View>
 
-        {tasks.length > 0 ? (
-          <View className="mb-6">
-            {tasks.map((task) => (
+        {/* Created Today Section */}
+        <View className="mb-4">
+          <Text className="text-sm font-semibold text-gray-600 mb-2">Created Today</Text>
+          {createdTodayTasks.length > 0 ? (
+            createdTodayTasks.map((task) => (
               <TouchableOpacity
                 key={task.id}
                 className="bg-white rounded-xl p-4 mb-3 shadow-sm border border-gray-100"
@@ -402,15 +420,70 @@ export default function Home() {
                   )}
                 </View>
               </TouchableOpacity>
-            ))}
-          </View>
-        ) : (
-          <View className="bg-white rounded-xl p-8 mb-6 items-center justify-center border border-gray-100">
-            <Ionicons name="checkmark-done-circle-outline" size={56} color="#E5E7EB" />
-            <Text className="text-gray-400 text-center mt-3 font-medium">No tasks for today</Text>
-            <Text className="text-gray-300 text-xs text-center mt-1">Create a task to get started</Text>
-          </View>
-        )}
+            ))
+          ) : (
+            <View className="bg-gray-50 rounded-xl p-4 mb-3 items-center">
+              <Text className="text-gray-400 text-sm">No tasks created today</Text>
+            </View>
+          )}
+        </View>
+
+        {/* Due Today Section */}
+        <View className="mb-6">
+          <Text className="text-sm font-semibold text-gray-600 mb-2">Due Today</Text>
+          {dueTodayTasks.length > 0 ? (
+            dueTodayTasks.map((task) => (
+              <TouchableOpacity
+                key={task.id}
+                className="bg-white rounded-xl p-4 mb-3 shadow-sm border border-red-100"
+                activeOpacity={0.7}
+                onPress={() => {
+                  router.push({
+                    pathname: '/task-details' as any,
+                    params: { taskId: task.id }
+                  });
+                }}
+              >
+                <View className="flex-row items-start">
+                  <View className="mr-3 mt-1">
+                    {task.completed ? (
+                      <Ionicons name="checkmark-circle" size={22} color="#f5e50b" />
+                    ) : (
+                      <Ionicons name="ellipse-outline" size={22} color="#EF4444" />
+                    )}
+                  </View>
+                  <View className="flex-1">
+                    <Text
+                      className={`text-base font-medium ${
+                        task.completed ? 'text-gray-400 line-through' : 'text-gray-800'
+                      }`}
+                    >
+                      {task.title}
+                    </Text>
+                    <View className="flex-row items-center mt-1">
+                      <Text className="text-xs text-red-500 mr-3 font-medium">
+                        Due: {task.dueTime}
+                      </Text>
+                      <View className="flex-row items-center">
+                        <View className="w-1.5 h-1.5 bg-yellow-400 rounded-full mr-1" />
+                        <Text className="text-xs text-yellow-500 font-medium">
+                          {task.group}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                  {task.completed && (
+                    <Ionicons name="checkmark-done" size={18} color="#10B981" />
+                  )}
+                </View>
+              </TouchableOpacity>
+            ))
+          ) : (
+            <View className="bg-gray-50 rounded-xl p-4 mb-3 items-center">
+              <Text className="text-gray-400 text-sm">No tasks due today</Text>
+            </View>
+          )}
+        </View>
 
         {/* Quick Actions */}
         <View className="flex-row justify-between mt-2">
