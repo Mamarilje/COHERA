@@ -95,11 +95,17 @@ export default function GroupDetails() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [showJoinModal, setShowJoinModal] = useState(false);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
-  const [joinCode, setJoinCode] = useState('');
   const [activeTab, setActiveTab] = useState<'project' | 'progress' | 'members'>('project');
+  
+  // Confirmation modals state
+  const [showAcceptConfirmModal, setShowAcceptConfirmModal] = useState(false);
+  const [showRejectConfirmModal, setShowRejectConfirmModal] = useState(false);
+  const [showKickConfirmModal, setShowKickConfirmModal] = useState(false);
+  const [selectedRequestForAccept, setSelectedRequestForAccept] = useState<JoinRequest | null>(null);
+  const [selectedRequestForReject, setSelectedRequestForReject] = useState<JoinRequest | null>(null);
+  const [selectedMemberForKick, setSelectedMemberForKick] = useState<Member | null>(null);
   const [showDeadlinePicker, setShowDeadlinePicker] = useState(false);
   const [showPriorityPicker, setShowPriorityPicker] = useState(false);
   const [selectedDeadlineDate, setSelectedDeadlineDate] = useState<Date>(new Date());
@@ -110,7 +116,15 @@ export default function GroupDetails() {
   // @mention states
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionedMembers, setMentionedMembers] = useState<Member[]>([]);
   const descriptionInputRef = useRef<TextInput>(null);
+  
+  // Assigned members state
+  const [selectedAssignedMembers, setSelectedAssignedMembers] = useState<string[]>([]);
+  
+  // Warning modal state
+  const [showAbuseWarningModal, setShowAbuseWarningModal] = useState(false);
+  const [overloadedMembers, setOverloadedMembers] = useState<Array<{uid: string, name: string, taskCount: number}>>([]);
   
   const [taskFormData, setTaskFormData] = useState<TaskFormData>({
     title: '',
@@ -222,70 +236,32 @@ export default function GroupDetails() {
     fetchGroupDetails();
   };
 
-  const handleJoinGroup = async () => {
-    if (!joinCode.trim()) {
-      Alert.alert('Error', 'Please enter a group code');
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const groupsRef = collection(db, 'groups');
-      const q = query(groupsRef, where('code', '==', joinCode.toUpperCase()));
-      const querySnapshot = await getDocs(q);
-
-      if (querySnapshot.empty) {
-        Alert.alert('Error', 'Invalid group code');
-        setIsLoading(false);
-        return;
-      }
-
-      const groupDoc = querySnapshot.docs[0];
-      const groupData = groupDoc.data();
-
-      if (groupData.members.includes(currentUser?.uid)) {
-        Alert.alert('Info', 'You are already a member of this group');
-        setShowJoinModal(false);
-        setIsLoading(false);
-        return;
-      }
-
-      const existingRequestQuery = query(
-        collection(db, 'joinRequests'),
-        where('groupId', '==', groupDoc.id),
-        where('userId', '==', currentUser?.uid),
-        where('status', '==', 'pending')
+  const checkForOverloadedMembers = async (memberIds: string[]): Promise<Array<{uid: string, name: string, taskCount: number}>> => {
+    const overloaded: Array<{uid: string, name: string, taskCount: number}> = [];
+    
+    for (const memberId of memberIds) {
+      const tasksQuery = query(
+        collection(db, 'tasks'),
+        where('groupId', '==', groupId),
+        where('assignedTo', 'array-contains', memberId),
+        where('completed', '==', false)
       );
-      const existingRequests = await getDocs(existingRequestQuery);
       
-      if (!existingRequests.empty) {
-        Alert.alert('Info', 'You already have a pending request for this group');
-        setShowJoinModal(false);
-        setIsLoading(false);
-        return;
+      const tasksSnapshot = await getDocs(tasksQuery);
+      const incompleteTaskCount = tasksSnapshot.size;
+      
+      // Check if member has 3 or 4 incomplete tasks
+      if (incompleteTaskCount >= 3 && incompleteTaskCount <= 4) {
+        const memberName = members.find(m => m.uid === memberId)?.name || memberId;
+        overloaded.push({
+          uid: memberId,
+          name: memberName,
+          taskCount: incompleteTaskCount
+        });
       }
-
-      await addDoc(collection(db, 'joinRequests'), {
-        groupId: groupDoc.id,
-        userId: currentUser?.uid,
-        userName: currentUser?.displayName || currentUser?.email?.split('@')[0],
-        userEmail: currentUser?.email,
-        timestamp: serverTimestamp(),
-        status: 'pending',
-      });
-
-      Alert.alert(
-        'Request Sent',
-        'Your request to join the group has been sent to the group admin',
-        [{ text: 'OK', onPress: () => setShowJoinModal(false) }]
-      );
-    } catch (error) {
-      console.error('Error joining group:', error);
-      Alert.alert('Error', 'Failed to send join request');
-    } finally {
-      setIsLoading(false);
-      setJoinCode('');
     }
+    
+    return overloaded;
   };
 
   const handleAcceptRequest = async (requestId: string, userId: string) => {
@@ -345,15 +321,20 @@ export default function GroupDetails() {
     );
   };
 
-  const handleDescriptionChange = (text: string) => {
-    setTaskFormData(prev => ({ ...prev, description: text }));
-    
+ const handleDescriptionChange = (text: string) => {
+  setTaskFormData(prev => ({ ...prev, description: text }));
+  
+  // Check if @ was just typed
+  const lastChar = text[text.length - 1];
+  if (lastChar === '@') {
+    setShowMentions(true);
+    setMentionQuery('');
+  } else {
+    // Find the last @ in the text
     const lastAtIndex = text.lastIndexOf('@');
-    if (lastAtIndex !== -1 && lastAtIndex === text.length - 1) {
-      setShowMentions(true);
-      setMentionQuery('');
-    } else if (lastAtIndex !== -1 && lastAtIndex > text.length - 30) {
+    if (lastAtIndex !== -1) {
       const query = text.substring(lastAtIndex + 1);
+      // If there's no space after the @, show mentions
       if (!query.includes(' ')) {
         setShowMentions(true);
         setMentionQuery(query);
@@ -363,19 +344,34 @@ export default function GroupDetails() {
     } else {
       setShowMentions(false);
     }
-  };
-
+  }
+};
   const insertMention = (member: Member) => {
     const beforeMention = taskFormData.description.substring(0, taskFormData.description.lastIndexOf('@'));
     const mentionText = `@${member.name} `;
     const newDescription = beforeMention + mentionText;
     
     setTaskFormData(prev => ({ ...prev, description: newDescription }));
+    
+    // Add to mentioned members if not already there
+    if (!mentionedMembers.find(m => m.uid === member.uid)) {
+      setMentionedMembers(prev => [...prev, member]);
+    }
+    
     setShowMentions(false);
     
     setTimeout(() => {
       descriptionInputRef.current?.focus();
     }, 100);
+  };
+
+  const removeMentionedMember = (memberId: string) => {
+    const memberToRemove = mentionedMembers.find(m => m.uid === memberId);
+    if (memberToRemove) {
+      setMentionedMembers(prev => prev.filter(m => m.uid !== memberId));
+      const updatedDescription = taskFormData.description.replace(`@${memberToRemove.name} `, '');
+      setTaskFormData(prev => ({ ...prev, description: updatedDescription }));
+    }
   };
 
   const getFilteredMembers = () => {
@@ -402,6 +398,20 @@ export default function GroupDetails() {
       return;
     }
 
+    // Check for overloaded members before creating task
+    if (selectedAssignedMembers.length > 0) {
+      const overloaded = await checkForOverloadedMembers(selectedAssignedMembers);
+      if (overloaded.length > 0) {
+        setOverloadedMembers(overloaded);
+        setShowAbuseWarningModal(true);
+        return;
+      }
+    }
+
+    await createTaskWithAssignments();
+  };
+
+  const createTaskWithAssignments = async () => {
     try {
       setIsUploadingFiles(true);
       let uploadedFileUrls: string[] = [];
@@ -448,7 +458,7 @@ export default function GroupDetails() {
         description: taskFormData.description,
         priority: taskFormData.priority,
         deadline: taskFormData.deadline,
-        assignedTo: [],
+        assignedTo: selectedAssignedMembers,
         ...(uploadedFileUrls.length > 0 && { fileUrls: uploadedFileUrls }),
         ...(uploadedFileUrls.length > 0 && { fileNames: taskFormData.files.slice(0, uploadedFileUrls.length).map((f) => f.name) }),
         completed: false,
@@ -467,7 +477,9 @@ export default function GroupDetails() {
         deadline: '',
         files: [],
       });
+      setSelectedAssignedMembers([]);
       setShowTaskModal(false);
+      setShowAbuseWarningModal(false);
       setIsUploadingFiles(false);
       fetchGroupDetails();
     } catch (error) {
@@ -553,6 +565,14 @@ export default function GroupDetails() {
     }).sort((a, b) => b.completionRate - a.completionRate);
   };
 
+  const getSortedTasks = () => {
+    return [...tasks].sort((a, b) => {
+      const dateA = new Date(a.deadline).getTime();
+      const dateB = new Date(b.deadline).getTime();
+      return dateB - dateA; // Newest (latest) first
+    });
+  };
+
   const isAdmin = group?.createdBy === currentUser?.uid;
 
   if (isLoading) {
@@ -579,9 +599,6 @@ export default function GroupDetails() {
           <Text className="text-2xl font-bold text-gray-800 flex-1" numberOfLines={1}>
             {group?.name}
           </Text>
-          <TouchableOpacity onPress={() => setShowJoinModal(true)}>
-            <Ionicons name="add-circle-outline" size={28} color="#F59E0B" />
-          </TouchableOpacity>
         </View>
 
         {/* Group Info Card */}
@@ -632,7 +649,10 @@ export default function GroupDetails() {
           <View>
             <TouchableOpacity 
               className="bg-yellow-400 rounded-xl p-4 mb-6 flex-row items-center justify-center"
-              onPress={() => setShowTaskModal(true)}
+              onPress={() => {
+                setShowTaskModal(true);
+                setSelectedAssignedMembers([]);
+              }}
             >
               <Ionicons name="add" size={20} color="white" />
               <Text className="text-white font-semibold ml-2">Create Task</Text>
@@ -649,7 +669,7 @@ export default function GroupDetails() {
               </View>
             ) : (
               <View className="space-y-3 mb-6">
-                {tasks.map((task) => (
+                {getSortedTasks().map((task) => (
                   <TouchableOpacity
                     key={task.id}
                     onPress={() => handleTaskPress(task)}
@@ -799,13 +819,19 @@ export default function GroupDetails() {
                       </View>
                       <View className="flex-row">
                         <TouchableOpacity
-                          onPress={() => handleAcceptRequest(request.id, request.userId)}
+                          onPress={() => {
+                            setSelectedRequestForAccept(request);
+                            setShowAcceptConfirmModal(true);
+                          }}
                           className="bg-green-500 px-4 py-2 rounded-lg mr-2"
                         >
                           <Text className="text-white text-sm font-medium">Accept</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
-                          onPress={() => handleRejectRequest(request.id)}
+                          onPress={() => {
+                            setSelectedRequestForReject(request);
+                            setShowRejectConfirmModal(true);
+                          }}
                           className="bg-red-500 px-4 py-2 rounded-lg"
                         >
                           <Text className="text-white text-sm font-medium">Reject</Text>
@@ -847,83 +873,21 @@ export default function GroupDetails() {
                     </View>
                   </View>
                   {isAdmin && member.uid !== currentUser?.uid && (
-                    <TouchableOpacity onPress={() => handleRemoveMember(member.uid)}>
+                    <TouchableOpacity 
+                      onPress={() => {
+                        setSelectedMemberForKick(member);
+                        setShowKickConfirmModal(true);
+                      }}
+                    >
                       <Ionicons name="trash-outline" size={20} color="#EF4444" />
                     </TouchableOpacity>
                   )}
                 </View>
               </View>
             ))}
-
-            <View className="bg-white rounded-xl p-4 mt-4 shadow-sm">
-              <Text className="text-gray-600 text-sm mb-2">Invite Code</Text>
-              <View className="flex-row justify-between items-center">
-                <Text className="text-xl font-bold text-orange-500">{group?.code}</Text>
-                <TouchableOpacity
-                  onPress={() => {
-                    Alert.alert(
-                      'Share Invite Code',
-                      `Share this code with others to join "${group?.name}":\n\n${group?.code}\n\nThey can join by tapping the + button in the group details page.`
-                    );
-                  }}
-                >
-                  <Ionicons name="share-outline" size={24} color="#F59E0B" />
-                </TouchableOpacity>
-              </View>
-              <Text className="text-xs text-gray-400 mt-2">
-                Share this code with others to let them join your group
-              </Text>
-            </View>
           </View>
         )}
       </View>
-
-      {/* Join Group Modal */}
-      <Modal
-        visible={showJoinModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowJoinModal(false)}
-      >
-        <View className="flex-1 justify-center items-center bg-black/50">
-          <View className="bg-white rounded-2xl p-6 w-[85%]">
-            <Text className="text-xl font-bold text-gray-800 mb-4">Join a Group</Text>
-            <Text className="text-gray-500 mb-4">
-              Enter the group code to request to join
-            </Text>
-            <TextInput
-              className="border border-gray-300 rounded-xl p-3 mb-6 text-base uppercase"
-              placeholder="Enter group code"
-              value={joinCode}
-              onChangeText={setJoinCode}
-              autoCapitalize="characters"
-              autoCorrect={false}
-            />
-            <View className="flex-row justify-end space-x-3">
-              <TouchableOpacity
-                onPress={() => {
-                  setShowJoinModal(false);
-                  setJoinCode('');
-                }}
-                className="px-4 py-2"
-              >
-                <Text className="text-gray-500">Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleJoinGroup}
-                disabled={isLoading}
-                className="bg-orange-500 px-6 py-2 rounded-xl"
-              >
-                {isLoading ? (
-                  <ActivityIndicator color="white" />
-                ) : (
-                  <Text className="text-white font-semibold">Request to Join</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* Task Creation Modal */}
       <Modal
@@ -936,7 +900,10 @@ export default function GroupDetails() {
           <View className="bg-white rounded-t-3xl p-6 max-h-[90%]">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-xl font-bold text-gray-800">Create New Task</Text>
-              <TouchableOpacity onPress={() => setShowTaskModal(false)}>
+              <TouchableOpacity onPress={() => {
+                setShowTaskModal(false);
+                setSelectedAssignedMembers([]);
+              }}>
                 <Ionicons name="close" size={24} color="#666" />
               </TouchableOpacity>
             </View>
@@ -957,102 +924,173 @@ export default function GroupDetails() {
               </View>
 
               {/* Description Input with @mention */}
-              <View className="mb-4 relative">
+            <View className="mb-4 relative z-0">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">
-                  Description (Use @ to mention team members)
+                   Description (Use @ to mention team members)
                 </Text>
-                <TextInput
-                  ref={descriptionInputRef}
-                  className="border border-gray-300 rounded-lg p-3 h-32"
-                  placeholder="Enter task description... Use @ to mention someone"
-                  value={taskFormData.description}
-                  onChangeText={handleDescriptionChange}
-                  multiline
-                  placeholderTextColor="#9CA3AF"
-                />
-                
-                {/* Mention Suggestions Modal */}
-                {showMentions && members.length > 0 && (
-                  <View className="absolute top-24 left-0 right-0 bg-white rounded-xl shadow-lg border border-gray-100 max-h-64 z-10">
-                    <FlatList
-                      data={members.filter(m => !mentionQuery || m.name.toLowerCase().includes(mentionQuery.toLowerCase()) || m.email.toLowerCase().includes(mentionQuery.toLowerCase()))}
-                      keyExtractor={(item) => item.uid}
-                      ListHeaderComponent={
-                        (!mentionQuery || 'everyone'.includes(mentionQuery.toLowerCase())) ? (
-                          <TouchableOpacity
-                            onPress={() => {
-                              const beforeMention = taskFormData.description.substring(0, taskFormData.description.lastIndexOf('@'));
-                              const mentionText = `@everyone `;
-                              const newDescription = beforeMention + mentionText;
-                              setTaskFormData(prev => ({ ...prev, description: newDescription }));
-                              setShowMentions(false);
-                              setTimeout(() => {
-                                descriptionInputRef.current?.focus();
-                              }, 100);
-                            }}
-                            className="flex-row items-center px-4 py-3 border-b border-gray-50 active:bg-gray-50"
-                          >
-                            <View className="w-10 h-10 bg-purple-100 rounded-full items-center justify-center mr-3">
-                              <Ionicons name="people" size={20} color="#9333EA" />
-                            </View>
-                            <View className="flex-1">
-                              <Text className="font-semibold text-gray-800 text-base">
-                                Mention everyone in this chat
-                              </Text>
-                              <Text className="text-xs text-gray-400 mt-0.5">
-                                Notify all members
-                              </Text>
-                            </View>
-                            <View className="w-8 h-8 bg-purple-100 rounded-full items-center justify-center ml-2">
-                              <Ionicons name="notifications-outline" size={16} color="#9333EA" />
-                            </View>
-                          </TouchableOpacity>
-                        ) : null
-                      }
-                      renderItem={({ item }) => (
-                        <TouchableOpacity
-                          onPress={() => insertMention(item)}
-                          className="flex-row items-center px-4 py-3 border-b border-gray-50 active:bg-gray-50"
-                        >
-                          {/* Avatar */}
-                          {item.profileImage ? (
-                            <Image source={{ uri: item.profileImage }} className="w-10 h-10 rounded-full mr-3" />
-                          ) : (
-                            <View className="w-10 h-10 bg-gradient-to-br from-yellow-400 to-amber-500 rounded-full items-center justify-center mr-3">
-                              <Text className="text-white font-bold text-base">
-                                {item.name.charAt(0).toUpperCase()}
-                              </Text>
-                            </View>
-                          )}
-                          
-                          {/* Name and Email */}
-                          <View className="flex-1">
-                            <Text className="font-semibold text-gray-800 text-base">
-                              {item.name}
-                            </Text>
-                            {item.email && (
-                              <Text className="text-xs text-gray-400 mt-0.5" numberOfLines={1}>
-                                {item.email}
-                              </Text>
-                            )}
-                          </View>
-                          
-                          {/* @ Icon */}
-                          <View className="w-8 h-8 bg-yellow-100 rounded-full items-center justify-center ml-2">
-                            <Ionicons name="at" size={16} color="#EAB308" />
-                          </View>
-                        </TouchableOpacity>
-                      )}
-                      ListEmptyComponent={
-                        <View className="p-6 items-center">
-                          <Text className="text-gray-400">No members found</Text>
-                        </View>
-                      }
-                    />
-                  </View>
+
+  <View className="relative z-10">
+    {/* Mentioned Members Cards - Solid Overlay */}
+    {mentionedMembers.length > 0 && (
+      <View 
+        style={{
+          marginBottom: 12,
+          gap: 8,
+          backgroundColor: '#FFFFFF',
+          padding: 12,
+          paddingBottom: 20,
+          borderRadius: 8,
+          borderWidth: 1,
+          borderColor: '#E5E7EB',
+          minHeight: mentionedMembers.length > 0 ? (mentionedMembers.length * 80 + 40) : 0,
+        }}
+      >
+        {mentionedMembers.map((member) => (
+          <View
+            key={member.uid}
+            className="flex-row items-center justify-between border-2 border-yellow-400 rounded-lg p-3 bg-white"
+          >
+            <View className="flex-row items-center flex-1">
+              {member.profileImage ? (
+                <Image source={{ uri: member.profileImage }} className="w-10 h-10 rounded-full mr-3" />
+              ) : (
+                <View className="w-10 h-10 bg-yellow-400 rounded-full items-center justify-center mr-3">
+                  <Text className="text-white font-bold text-base">
+                    {member.name.charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+              )}
+              <View className="flex-1">
+                <Text className="font-semibold text-gray-800">
+                  {member.name}
+                </Text>
+                {member.email && (
+                  <Text className="text-xs text-gray-500" numberOfLines={1}>
+                    {member.email}
+                  </Text>
                 )}
               </View>
+            </View>
+            <TouchableOpacity onPress={() => removeMentionedMember(member.uid)} className="ml-2">
+              <Ionicons name="close-circle" size={20} color="#EAB308" />
+            </TouchableOpacity>
+          </View>
+        ))}
+      </View>
+    )}
 
+    <TextInput
+      ref={descriptionInputRef}
+      className="border border-gray-300 rounded-lg p-3 h-32 bg-white text-gray-800"
+      placeholder="Enter task description... Use @ to mention someone"
+      value={taskFormData.description}
+      onChangeText={handleDescriptionChange}
+      multiline
+      placeholderTextColor="#9CA3AF"
+    />
+
+    {/* Mention Suggestions Dropdown - Positioned below input with solid overlay */}
+    {showMentions && members.length > 0 && (
+      <View 
+        style={{
+          position: 'absolute',
+          top: '100%',
+          left: 0,
+          right: 0,
+          marginTop: 4,
+          backgroundColor: 'white',
+          borderRadius: 12,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.3,
+          shadowRadius: 6,
+          elevation: 10,
+          zIndex: 999,
+          maxHeight: 280,
+          borderWidth: 1,
+          borderColor: '#E5E7EB',
+        }}
+      >
+        <FlatList
+          data={getFilteredMembers()}
+          keyExtractor={(item) => item.uid}
+          keyboardShouldPersistTaps="handled"
+          ListHeaderComponent={
+            (!mentionQuery || 'everyone'.includes(mentionQuery.toLowerCase())) ? (
+              <TouchableOpacity
+                onPress={() => {
+                  const beforeMention = taskFormData.description.substring(0, taskFormData.description.lastIndexOf('@'));
+                  const mentionText = `@everyone `;
+                  const newDescription = beforeMention + mentionText;
+                  setTaskFormData(prev => ({ ...prev, description: newDescription }));
+                  setShowMentions(false);
+                  setTimeout(() => {
+                    descriptionInputRef.current?.focus();
+                  }, 100);
+                }}
+                className="flex-row items-center px-4 py-3 border-b border-gray-100"
+              >
+                <View className="w-10 h-10 bg-purple-100 rounded-full items-center justify-center mr-3">
+                  <Ionicons name="people" size={20} color="#9333EA" />
+                </View>
+                <View className="flex-1">
+                  <Text className="font-semibold text-gray-800 text-base">
+                    Mention everyone in this chat
+                  </Text>
+                  <Text className="text-xs text-gray-500 mt-0.5">
+                    Notify all members
+                  </Text>
+                </View>
+                <View className="w-8 h-8 bg-purple-100 rounded-full items-center justify-center ml-2">
+                  <Ionicons name="notifications-outline" size={16} color="#9333EA" />
+                </View>
+              </TouchableOpacity>
+            ) : null
+          }
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              onPress={() => insertMention(item)}
+              className="flex-row items-center px-4 py-3 border-b border-gray-100"
+            >
+              {/* Avatar */}
+              {item.profileImage ? (
+                <Image source={{ uri: item.profileImage }} className="w-10 h-10 rounded-full mr-3" />
+              ) : (
+                <View className="w-10 h-10 bg-gradient-to-br from-yellow-400 to-amber-500 rounded-full items-center justify-center mr-3">
+                  <Text className="text-white font-bold text-base">
+                    {item.name.charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+              )}
+              
+              {/* Name and Email */}
+              <View className="flex-1">
+                <Text className="font-semibold text-gray-800 text-base">
+                  {item.name}
+                </Text>
+                {item.email && (
+                  <Text className="text-xs text-gray-500 mt-0.5" numberOfLines={1}>
+                    {item.email}
+                  </Text>
+                )}
+              </View>
+              
+              {/* @ Icon */}
+              <View className="w-8 h-8 bg-yellow-100 rounded-full items-center justify-center ml-2">
+                <Ionicons name="at" size={16} color="#EAB308" />
+              </View>
+            </TouchableOpacity>
+          )}
+          ListEmptyComponent={
+            <View className="p-6 items-center">
+              <Text className="text-gray-400">No members found</Text>
+            </View>
+          }
+        />
+      </View>
+    )}
+  </View>
+</View>
               {/* File Upload */}
               <View className="mb-4">
                 <View className="flex-row justify-between items-center mb-2">
@@ -1187,10 +1225,78 @@ export default function GroupDetails() {
                 </TouchableOpacity>
               </View>
 
+              {/* Assign Members */}
+              <View className="mb-4">
+                <Text className="text-sm font-semibold text-gray-700 mb-2">Assign to Members</Text>
+                <View className="bg-gray-50 rounded-lg p-3 max-h-60">
+                  <ScrollView showsVerticalScrollIndicator={true}>
+                    {members.length === 0 ? (
+                      <Text className="text-gray-500 text-center py-4">No members available</Text>
+                    ) : (
+                      <View>
+                        {members.map((member) => (
+                          <TouchableOpacity
+                            key={member.uid}
+                            onPress={() => {
+                              setSelectedAssignedMembers((prev) =>
+                                prev.includes(member.uid)
+                                  ? prev.filter((id) => id !== member.uid)
+                                  : [...prev, member.uid]
+                              );
+                            }}
+                            className="flex-row items-center py-3 px-2 border-b border-gray-200"
+                          >
+                            <View
+                              className={`w-5 h-5 border-2 rounded mr-3 items-center justify-center ${
+                                selectedAssignedMembers.includes(member.uid)
+                                  ? 'bg-yellow-400 border-yellow-400'
+                                  : 'border-gray-300 bg-white'
+                              }`}
+                            >
+                              {selectedAssignedMembers.includes(member.uid) && (
+                                <Ionicons name="checkmark" size={12} color="white" />
+                              )}
+                            </View>
+                            <View className="flex-row items-center flex-1">
+                              {member.profileImage ? (
+                                <Image
+                                  source={{ uri: member.profileImage }}
+                                  className="w-8 h-8 rounded-full mr-2"
+                                />
+                              ) : (
+                                <View className="w-8 h-8 bg-yellow-200 rounded-full items-center justify-center mr-2">
+                                  <Text className="text-yellow-700 font-bold text-xs">
+                                    {member.name.charAt(0).toUpperCase()}
+                                  </Text>
+                                </View>
+                              )}
+                              <View className="flex-1">
+                                <Text className="font-medium text-gray-800">{member.name}</Text>
+                                {member.email && (
+                                  <Text className="text-xs text-gray-500">{member.email}</Text>
+                                )}
+                              </View>
+                            </View>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
+                  </ScrollView>
+                </View>
+                {selectedAssignedMembers.length > 0 && (
+                  <Text className="text-xs text-gray-500 mt-2">
+                    {selectedAssignedMembers.length} member(s) selected
+                  </Text>
+                )}
+              </View>
+
               {/* Action Buttons */}
               <View className="flex-row gap-3 mt-6">
                 <TouchableOpacity
-                  onPress={() => setShowTaskModal(false)}
+                  onPress={() => {
+                    setShowTaskModal(false);
+                    setSelectedAssignedMembers([]);
+                  }}
                   className="flex-1 border border-gray-300 rounded-lg py-3"
                 >
                   <Text className="text-center text-gray-700 font-semibold">Cancel</Text>
@@ -1475,6 +1581,275 @@ export default function GroupDetails() {
                 className="bg-yellow-400 rounded-lg py-3"
               >
                 <Text className="text-center text-white font-semibold">Done</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Accept Member Confirmation Modal */}
+      <Modal
+        visible={showAcceptConfirmModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => {
+          setShowAcceptConfirmModal(false);
+          setSelectedRequestForAccept(null);
+        }}
+      >
+        <View className="flex-1 justify-center items-center bg-black/50">
+          <View className="bg-white rounded-2xl p-6 w-[85%]">
+            <View className="items-center mb-4">
+              <View className="bg-green-100 rounded-full p-4 mb-4">
+                <Ionicons name="checkmark-circle" size={40} color="#22C55E" />
+              </View>
+              <Text className="text-xl font-bold text-gray-800 text-center mb-2">
+                Accept Member?
+              </Text>
+              {selectedRequestForAccept && (
+                <>
+                  <Text className="text-base font-semibold text-gray-700 mb-1">
+                    {selectedRequestForAccept.userName}
+                  </Text>
+                  <Text className="text-sm text-gray-500 text-center">
+                    {selectedRequestForAccept.userEmail}
+                  </Text>
+                </>
+              )}
+            </View>
+
+            <View className="bg-blue-50 rounded-lg p-3 mb-6">
+              <Text className="text-sm text-gray-700 text-center">
+                Are you sure you want to accept this member to join <Text className="font-semibold">{group?.name}</Text>?
+              </Text>
+            </View>
+
+            <View className="flex-row justify-end gap-3">
+              <TouchableOpacity
+                onPress={() => {
+                  setShowAcceptConfirmModal(false);
+                  setSelectedRequestForAccept(null);
+                }}
+                className="px-5 py-2 rounded-lg border border-gray-300"
+              >
+                <Text className="text-gray-700 font-semibold">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={async () => {
+                  if (selectedRequestForAccept) {
+                    await handleAcceptRequest(selectedRequestForAccept.id, selectedRequestForAccept.userId);
+                    setShowAcceptConfirmModal(false);
+                    setSelectedRequestForAccept(null);
+                  }
+                }}
+                className="px-5 py-2 rounded-lg bg-green-500"
+              >
+                <Text className="text-white font-semibold">Confirm Accept</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Reject Member Confirmation Modal */}
+      <Modal
+        visible={showRejectConfirmModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => {
+          setShowRejectConfirmModal(false);
+          setSelectedRequestForReject(null);
+        }}
+      >
+        <View className="flex-1 justify-center items-center bg-black/50">
+          <View className="bg-white rounded-2xl p-6 w-[85%]">
+            <View className="items-center mb-4">
+              <View className="bg-orange-100 rounded-full p-4 mb-4">
+                <Ionicons name="close-circle" size={40} color="#F97316" />
+              </View>
+              <Text className="text-xl font-bold text-gray-800 text-center mb-2">
+                Reject Member?
+              </Text>
+              {selectedRequestForReject && (
+                <>
+                  <Text className="text-base font-semibold text-gray-700 mb-1">
+                    {selectedRequestForReject.userName}
+                  </Text>
+                  <Text className="text-sm text-gray-500 text-center">
+                    {selectedRequestForReject.userEmail}
+                  </Text>
+                </>
+              )}
+            </View>
+
+            <View className="bg-orange-50 rounded-lg p-3 mb-6">
+              <Text className="text-sm text-gray-700 text-center">
+                This member's request to join <Text className="font-semibold">{group?.name}</Text> will be rejected. They can send another request later.
+              </Text>
+            </View>
+
+            <View className="flex-row justify-end gap-3">
+              <TouchableOpacity
+                onPress={() => {
+                  setShowRejectConfirmModal(false);
+                  setSelectedRequestForReject(null);
+                }}
+                className="px-5 py-2 rounded-lg border border-gray-300"
+              >
+                <Text className="text-gray-700 font-semibold">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={async () => {
+                  if (selectedRequestForReject) {
+                    await handleRejectRequest(selectedRequestForReject.id);
+                    setShowRejectConfirmModal(false);
+                    setSelectedRequestForReject(null);
+                  }
+                }}
+                className="px-5 py-2 rounded-lg bg-orange-500"
+              >
+                <Text className="text-white font-semibold">Confirm Reject</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Kick Member Confirmation Modal */}
+      <Modal
+        visible={showKickConfirmModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => {
+          setShowKickConfirmModal(false);
+          setSelectedMemberForKick(null);
+        }}
+      >
+        <View className="flex-1 justify-center items-center bg-black/50">
+          <View className="bg-white rounded-2xl p-6 w-[85%]">
+            <View className="items-center mb-4">
+              <View className="bg-red-100 rounded-full p-4 mb-4">
+                <Ionicons name="trash" size={40} color="#EF4444" />
+              </View>
+              <Text className="text-xl font-bold text-gray-800 text-center mb-2">
+                Remove Member?
+              </Text>
+              {selectedMemberForKick && (
+                <>
+                  <Text className="text-base font-semibold text-gray-700 mb-1">
+                    {selectedMemberForKick.name}
+                  </Text>
+                  {selectedMemberForKick.email && (
+                    <Text className="text-sm text-gray-500 text-center">
+                      {selectedMemberForKick.email}
+                    </Text>
+                  )}
+                </>
+              )}
+            </View>
+
+            <View className="bg-red-50 rounded-lg p-3 mb-6">
+              <Text className="text-sm text-gray-700 text-center">
+                This member will be removed from <Text className="font-semibold">{group?.name}</Text> and will no longer have access to group tasks and information.
+              </Text>
+            </View>
+
+            <View className="flex-row justify-end gap-3">
+              <TouchableOpacity
+                onPress={() => {
+                  setShowKickConfirmModal(false);
+                  setSelectedMemberForKick(null);
+                }}
+                className="px-5 py-2 rounded-lg border border-gray-300"
+              >
+                <Text className="text-gray-700 font-semibold">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={async () => {
+                  if (selectedMemberForKick) {
+                    try {
+                      await updateDoc(doc(db, 'groups', groupId as string), {
+                        members: arrayRemove(selectedMemberForKick.uid),
+                      });
+                      Alert.alert('Success', 'Member removed');
+                      fetchGroupDetails();
+                    } catch (error) {
+                      console.error('Error removing member:', error);
+                      Alert.alert('Error', 'Failed to remove member');
+                    }
+                    setShowKickConfirmModal(false);
+                    setSelectedMemberForKick(null);
+                  }
+                }}
+                className="px-5 py-2 rounded-lg bg-red-500"
+              >
+                <Text className="text-white font-semibold">Remove Member</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Abuse of Power Warning Modal */}
+      <Modal
+        visible={showAbuseWarningModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowAbuseWarningModal(false)}
+      >
+        <View className="flex-1 justify-center items-center bg-black/50">
+          <View className="bg-white rounded-2xl p-6 w-[85%] max-h-[80%]">
+            <View className="items-center mb-4">
+              <View className="bg-red-100 rounded-full p-4 mb-4">
+                <Ionicons name="warning" size={40} color="#EF4444" />
+              </View>
+              <Text className="text-xl font-bold text-gray-800 text-center">
+                Task Overload Warning
+              </Text>
+            </View>
+
+            <View className="bg-red-50 rounded-lg p-4 mb-6 max-h-48 overflow-y-auto">
+              <Text className="text-sm font-semibold text-red-700 mb-3">
+                The following member(s) already have 3-4 incomplete tasks:
+              </Text>
+              <View>
+                {overloadedMembers.map((member) => (
+                  <View 
+                    key={member.uid}
+                    className="flex-row items-center justify-between bg-white rounded-lg p-3 mb-2 border border-red-200"
+                  >
+                    <View className="flex-1">
+                      <Text className="font-semibold text-gray-800">{member.name}</Text>
+                      <Text className="text-xs text-red-600">
+                        {member.taskCount} incomplete task{member.taskCount !== 1 ? 's' : ''}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+              <Text className="text-xs text-gray-600 mt-3">
+                Assigning more tasks may be considered an abuse of administrative power. Please ensure this assignment is necessary.
+              </Text>
+            </View>
+
+            <View className="flex-row justify-end gap-3">
+              <TouchableOpacity
+                onPress={() => {
+                  setShowAbuseWarningModal(false);
+                  setOverloadedMembers([]);
+                }}
+                className="px-5 py-2 rounded-lg border border-gray-300"
+              >
+                <Text className="text-gray-700 font-semibold">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowAbuseWarningModal(false);
+                  createTaskWithAssignments();
+                }}
+                className="px-5 py-2 rounded-lg bg-orange-500"
+              >
+                <Text className="text-white font-semibold">Assign Anyway</Text>
               </TouchableOpacity>
             </View>
           </View>

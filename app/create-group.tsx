@@ -67,6 +67,9 @@ export default function CreateGroup() {
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [joinCode, setJoinCode] = useState('');
   const [isJoining, setIsJoining] = useState(false);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successGroupName, setSuccessGroupName] = useState('');
 
   const generateGroupCode = () => {
     return Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -113,16 +116,8 @@ export default function CreateGroup() {
         pendingMembers: [],
       });
 
-      Alert.alert(
-        'Success',
-        `Group "${groupName}" created successfully!\n\nShare this code with others to join: ${groupCode}`,
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back(),
-          },
-        ]
-      );
+      setSuccessGroupName(groupName);
+      setShowSuccessModal(true);
     } catch (error) {
       console.error('Error creating group:', error);
       Alert.alert('Error', 'Failed to create group. Please try again.');
@@ -168,16 +163,8 @@ export default function CreateGroup() {
         pendingMembers: [],
       });
 
-      Alert.alert(
-        'Success',
-        `Group "${customName}" created successfully!\n\nShare this code with others to join: ${groupCode}`,
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back(),
-          },
-        ]
-      );
+      setSuccessGroupName(customName);
+      setShowSuccessModal(true);
     } catch (error) {
       console.error('Error creating group:', error);
       Alert.alert('Error', 'Failed to create group');
@@ -253,20 +240,9 @@ export default function CreateGroup() {
         status: 'pending',
       });
 
-      Alert.alert(
-        'Success',
-        `Request sent to join "${groupData.name}". Waiting for group creator approval.`,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              setShowJoinModal(false);
-              setJoinCode('');
-              router.back();
-            },
-          },
-        ]
-      );
+      setShowJoinModal(false);
+      setJoinCode('');
+      setShowApprovalModal(true);
     } catch (error) {
       console.error('Error joining group:', error);
       Alert.alert('Error', 'Failed to join group. Please try again.');
@@ -497,6 +473,68 @@ export default function CreateGroup() {
                 )}
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Approval Waiting Modal */}
+      <Modal
+        visible={showApprovalModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowApprovalModal(false)}
+      >
+        <View className="flex-1 justify-center items-center bg-black/50">
+          <View className="bg-white rounded-2xl p-6 w-[85%] items-center">
+            <View className="w-16 h-16 rounded-full bg-blue-100 items-center justify-center mb-4">
+              <Ionicons name="hourglass-outline" size={32} color="#3B82F6" />
+            </View>
+            <Text className="text-xl font-bold text-gray-800 mb-2 text-center">
+              Waiting for Approval
+            </Text>
+            <Text className="text-gray-500 mb-6 text-center">
+              Please wait for the group admin to accept your request to join the group.
+            </Text>
+            <TouchableOpacity
+              onPress={() => {
+                setShowApprovalModal(false);
+                router.back();
+              }}
+              className="bg-blue-500 px-8 py-3 rounded-xl w-full"
+            >
+              <Text className="text-white font-semibold text-center">OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Success Modal */}
+      <Modal
+        visible={showSuccessModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowSuccessModal(false)}
+      >
+        <View className="flex-1 justify-center items-center bg-black/50">
+          <View className="bg-white rounded-2xl p-6 w-[85%] items-center">
+            <View className="w-16 h-16 rounded-full bg-green-100 items-center justify-center mb-4">
+              <Ionicons name="checkmark-circle" size={40} color="#10B981" />
+            </View>
+            <Text className="text-xl font-bold text-gray-800 mb-2 text-center">
+              Success!
+            </Text>
+            <Text className="text-gray-600 mb-6 text-center text-base">
+              You successfully created "{successGroupName}"
+            </Text>
+            <TouchableOpacity
+              onPress={() => {
+                setShowSuccessModal(false);
+                router.back();
+              }}
+              className="bg-green-500 px-8 py-3 rounded-xl w-full"
+            >
+              <Text className="text-white font-semibold text-center">OK</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
