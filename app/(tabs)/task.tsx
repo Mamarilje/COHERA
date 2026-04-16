@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput, Modal, FlatList } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useState, useEffect, useCallback } from "react";
 import { collection, query, getDocs, where, updateDoc, deleteDoc, doc, and, getDoc } from "firebase/firestore";
@@ -58,10 +58,13 @@ export default function Tasks() {
   const currentUser = auth.currentUser;
   const [tasks, setTasks] = useState<Task[]>([]);
   const [groups, setGroups] = useState<Map<string, string>>(new Map());
+  const [groupsList, setGroupsList] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeStatus, setActiveStatus] = useState<'all' | 'todo' | 'inprogress' | 'completed' | 'overdue'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
+  const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>('all');
+  const [showGroupFilter, setShowGroupFilter] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -70,7 +73,7 @@ export default function Tasks() {
   );
 
   const fetchUserGroups = async () => {
-    if (!currentUser) return new Map();
+    if (!currentUser) return { groupsMap: new Map(), groupsList: [] };
     
     try {
       const groupsRef = collection(db, 'groups');
@@ -78,15 +81,18 @@ export default function Tasks() {
       const groupsSnapshot = await getDocs(q);
       
       const groupsMap = new Map<string, string>();
+      const groupsArray: Group[] = [];
       groupsSnapshot.forEach((doc) => {
         groupsMap.set(doc.id, doc.data().name);
+        groupsArray.push({ id: doc.id, name: doc.data().name });
       });
       
       setGroups(groupsMap);
-      return groupsMap;
+      setGroupsList(groupsArray);
+      return { groupsMap, groupsList: groupsArray };
     } catch (error) {
       console.error('Error fetching groups:', error);
-      return new Map();
+      return { groupsMap: new Map(), groupsList: [] };
     }
   };
 
@@ -95,7 +101,7 @@ export default function Tasks() {
       setLoading(true);
       
       // First get user's groups
-      const groupsMap = await fetchUserGroups();
+      const { groupsMap, groupsList } = await fetchUserGroups();
       const userGroupIds = Array.from(groupsMap.keys());
       
       if (userGroupIds.length === 0) {
@@ -173,14 +179,21 @@ export default function Tasks() {
   const getDateCategory = (deadline: string) => {
     const taskDate = new Date(deadline);
     const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const taskDateNormalized = new Date(taskDate);
+    taskDateNormalized.setHours(0, 0, 0, 0);
+    
+    // Check if overdue first
+    if (taskDateNormalized < today) return 'Overdue';
+    
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
     const nextWeek = new Date(today);
     nextWeek.setDate(nextWeek.getDate() + 7);
 
-    if (taskDate.toDateString() === today.toDateString()) return 'Today';
-    if (taskDate.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
-    if (taskDate <= nextWeek) return 'Next Week';
+    if (taskDateNormalized.getTime() === today.getTime()) return 'Today';
+    if (taskDateNormalized.getTime() === tomorrow.getTime()) return 'Tomorrow';
+    if (taskDateNormalized <= nextWeek) return 'Next Week';
     return 'Later';
   };
 
@@ -192,33 +205,43 @@ export default function Tasks() {
     return taskDate < today;
   };
 
+  // Filter tasks by group first
+  const groupFilteredTasks = selectedGroupFilter !== 'all' 
+    ? tasks.filter(task => task.groupId === selectedGroupFilter)
+    : tasks;
+
   const statusCounts = {
-    all: tasks.length,
-    todo: tasks.filter(task => !task.completed && !isOverdue(task.deadline, task.completed)).length,
-    inprogress: tasks.filter(task => !task.completed && !isOverdue(task.deadline, task.completed)).length,
-    completed: tasks.filter(task => task.completed).length,
-    overdue: tasks.filter(task => !task.completed && isOverdue(task.deadline, task.completed)).length,
+    all: groupFilteredTasks.length,
+    todo: groupFilteredTasks.filter(task => !task.completed && !isOverdue(task.deadline, task.completed)).length,
+    inprogress: groupFilteredTasks.filter(task => !task.completed && !isOverdue(task.deadline, task.completed)).length,
+    completed: groupFilteredTasks.filter(task => task.completed).length,
+    overdue: groupFilteredTasks.filter(task => !task.completed && isOverdue(task.deadline, task.completed)).length,
   };
 
   const getFilteredTasks = () => {
     let filtered = tasks;
     
+    // Apply group filter
+    if (selectedGroupFilter !== 'all') {
+      filtered = filtered.filter(task => task.groupId === selectedGroupFilter);
+    }
+    
     // Apply status filter
-    switch (activeStatus) {
-      case 'todo':
-        filtered = tasks.filter(task => !task.completed && !isOverdue(task.deadline, task.completed));
-        break;
-      case 'inprogress':
-        filtered = tasks.filter(task => !task.completed && !isOverdue(task.deadline, task.completed));
-        break;
-      case 'completed':
-        filtered = tasks.filter(task => task.completed);
-        break;
-      case 'overdue':
-        filtered = tasks.filter(task => !task.completed && isOverdue(task.deadline, task.completed));
-        break;
-      default:
-        filtered = tasks;
+    if (activeStatus !== 'all') {
+      switch (activeStatus) {
+        case 'todo':
+          filtered = filtered.filter(task => !task.completed && !isOverdue(task.deadline, task.completed));
+          break;
+        case 'inprogress':
+          filtered = filtered.filter(task => !task.completed && !isOverdue(task.deadline, task.completed));
+          break;
+        case 'completed':
+          filtered = filtered.filter(task => task.completed);
+          break;
+        case 'overdue':
+          filtered = filtered.filter(task => !task.completed && isOverdue(task.deadline, task.completed));
+          break;
+      }
     }
     
     // Apply search filter
@@ -400,6 +423,22 @@ export default function Tasks() {
         </View>
       )}
 
+      {/* GROUP FILTER DROPDOWN */}
+      <View className="mb-6">
+        <TouchableOpacity 
+          onPress={() => setShowGroupFilter(true)}
+          className="flex-row items-center justify-between bg-white rounded-xl px-4 py-3 shadow-sm border border-gray-100"
+        >
+          <View className="flex-row items-center flex-1">
+            <Ionicons name="filter" size={18} color="#6B7280" />
+            <Text className="ml-2 text-gray-700 font-medium">
+              {selectedGroupFilter === 'all' ? 'All Groups' : groupsList.find(g => g.id === selectedGroupFilter)?.name || 'Select Group'}
+            </Text>
+          </View>
+          <Ionicons name="chevron-down" size={18} color="#9CA3AF" />
+        </TouchableOpacity>
+      </View>
+
       {/* HORIZONTAL STATUS FILTER */}
       <ScrollView 
         horizontal 
@@ -507,6 +546,61 @@ export default function Tasks() {
           )}
         </>
       )}
+
+      {/* GROUP FILTER MODAL */}
+      <Modal
+        visible={showGroupFilter}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowGroupFilter(false)}
+      >
+        <TouchableOpacity 
+          className="flex-1 bg-black/50"
+          activeOpacity={1}
+          onPress={() => setShowGroupFilter(false)}
+        >
+          <View className="flex-1 justify-end">
+            <TouchableOpacity 
+              activeOpacity={1}
+              className="bg-white rounded-t-3xl p-6"
+            >
+              <View className="flex-row justify-between items-center mb-4">
+                <Text className="text-lg font-bold text-gray-800">Select Group</Text>
+                <TouchableOpacity onPress={() => setShowGroupFilter(false)}>
+                  <Ionicons name="close" size={24} color="#6B7280" />
+                </TouchableOpacity>
+              </View>
+              
+              <FlatList
+                data={[{ id: 'all', name: 'All Groups' }, ...groupsList]}
+                keyExtractor={(item) => item.id}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setSelectedGroupFilter(item.id);
+                      setShowGroupFilter(false);
+                    }}
+                    className={`p-4 border-b border-gray-100 flex-row items-center ${
+                      selectedGroupFilter === item.id ? 'bg-blue-50' : ''
+                    }`}
+                  >
+                    <Text className={`text-base flex-1 ${
+                      selectedGroupFilter === item.id ? 'text-blue-600 font-semibold' : 'text-gray-700'
+                    }`}>
+                      {item.name}
+                    </Text>
+                    {selectedGroupFilter === item.id && (
+                      <Ionicons name="checkmark" size={20} color="#3B82F6" />
+                    )}
+                  </TouchableOpacity>
+                )}
+                scrollEnabled={true}
+                className="max-h-96"
+              />
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </ScrollView>
   );
 }

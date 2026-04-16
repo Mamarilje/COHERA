@@ -62,6 +62,8 @@ export default function Home() {
     inProgress: 0,
     completed: 0
   });
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
 
   const getIconForCategory = (category: string) => {
     switch (category?.toLowerCase()) {
@@ -265,6 +267,36 @@ export default function Home() {
     await fetchTasks();
   };
 
+  // Get unique categories from groups
+  const getCategories = (): string[] => {
+    const categories = new Set(groups.map(g => g.category || 'Other'));
+    return Array.from(categories).sort();
+  };
+
+  // Get groups by category
+  const getGroupsByCategory = (category: string): Group[] => {
+    return groups.filter(g => (g.category || 'Other') === category);
+  };
+
+  // Get count for a category
+  const getCategoryTaskCount = (category: string): number => {
+    return getGroupsByCategory(category).reduce((total, group) => total + group.taskCount, 0);
+  };
+
+  // Get icon for category
+  const getCategoryIcon = (category: string): string => {
+    switch (category?.toLowerCase()) {
+      case 'home':
+        return 'home';
+      case 'school':
+        return 'school';
+      case 'work':
+        return 'briefcase';
+      default:
+        return 'folder';
+    }
+  };
+
   if (isLoading) {
     return (
       <View className="flex-1 bg-white items-center justify-center">
@@ -321,7 +353,7 @@ export default function Home() {
           </View>
         </View>
 
-        {/* MY GROUPS SECTION */}
+        {/* MY GROUPS BY CATEGORY SECTION */}
         <View className="flex-row justify-between items-center mb-4">
           <Text className="font-semibold text-gray-800 text-lg">My Groups</Text>
           <TouchableOpacity onPress={handleSeeAllGroups}>
@@ -329,21 +361,29 @@ export default function Home() {
           </TouchableOpacity>
         </View>
 
+        {/* Category Box Grid */}
         <View className="flex-row flex-wrap justify-between mb-6">
-          {groups.length > 0 ? (
-            groups.map((group) => (
+          {getCategories().length > 0 ? (
+            getCategories().map((category) => (
               <TouchableOpacity
-                key={group.id}
-                onPress={() => handleGroupPress(group.id, group.name)}
+                key={category}
+                onPress={() => {
+                  router.push({
+                    pathname: '/category-groups' as any,
+                    params: { category }
+                  });
+                }}
                 className="bg-white rounded-xl border border-yellow-200 w-[48%] p-4 items-center mb-4 shadow-sm"
                 activeOpacity={0.8}
               >
-                <Image source={{ uri: group.icon }} className="w-12 h-12 mb-2" />
-                <Text className="font-semibold text-gray-800 text-center">{group.name}</Text>
-                <Text className="text-xs text-gray-400 mt-1">{group.taskCount} tasks</Text>
-                {group.code && (
-                  <Text className="text-xs text-gray-300 mt-1">Code: {group.code}</Text>
-                )}
+                <View className="bg-yellow-100 rounded-full p-3 mb-2">
+                  <Ionicons name={getCategoryIcon(category) as any} size={32} color="#EAB308" />
+                </View>
+                <Text className="font-semibold text-gray-800 text-center capitalize">{category}</Text>
+                <Text className="text-xs text-gray-400 mt-1">
+                  {getGroupsByCategory(category).length} group{getGroupsByCategory(category).length !== 1 ? 's' : ''}
+                </Text>
+                <Text className="text-xs text-gray-300 mt-1">{getCategoryTaskCount(category)} tasks</Text>
               </TouchableOpacity>
             ))
           ) : (

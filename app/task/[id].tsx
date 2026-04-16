@@ -44,7 +44,7 @@ type Task = {
   assignedTo: string[];
   completed: boolean;
   createdBy: string;
-  createdAt: string;
+  createdAt: any;
   fileUrls?: string[];
   fileNames?: string[];
   groupId?: string;
@@ -96,6 +96,10 @@ export default function TaskDetail() {
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const descriptionInputRef = useRef<TextInput>(null);
+  
+  // Task overload warning state
+  const [showOverloadWarning, setShowOverloadWarning] = useState(false);
+  const [memberTaskCount, setMemberTaskCount] = useState(0);
   
   // Edit form states
   const [editTitle, setEditTitle] = useState('');
@@ -218,11 +222,39 @@ export default function TaskDetail() {
 
       fetchComments();
       
+      // Check if current user has task overload
+      if (taskData && taskData.assignedTo && taskData.assignedTo.includes(currentUser?.uid || '')) {
+        checkTaskOverload(taskData);
+      }
+      
     } catch (error) {
       console.error('Error fetching task:', error);
       Alert.alert('Error', 'Failed to load task details');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const checkTaskOverload = async (taskData: Task) => {
+    if (!taskData?.groupId || !currentUser?.uid) return;
+    
+    try {
+      const tasksQuery = query(
+        collection(db, 'tasks'),
+        where('groupId', '==', taskData.groupId),
+        where('assignedTo', 'array-contains', currentUser.uid),
+        where('completed', '==', false)
+      );
+      
+      const tasksSnapshot = await getDocs(tasksQuery);
+      const incompleteCount = tasksSnapshot.size;
+      
+      if (incompleteCount >= 3 && incompleteCount <= 4) {
+        setMemberTaskCount(incompleteCount);
+        setShowOverloadWarning(true);
+      }
+    } catch (error) {
+      console.error('Error checking task overload:', error);
     }
   };
 
@@ -392,8 +424,8 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       return;
     }
 
-    const cacheDir = FileSystem.cacheDirectory || '';
-    let downloadDir = cacheDir + 'Download/';
+    const cacheDir = (FileSystem as any).documentDirectory || (FileSystem as any).cacheDirectory || '';
+    let downloadDir = cacheDir ? cacheDir + 'Download/' : '';
 
     try {
       const dirInfo = await FileSystem.getInfoAsync(downloadDir);
@@ -722,6 +754,21 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
 
           {/* Task Card */}
           <View className="bg-white rounded-2xl p-6 mb-6 shadow-sm">
+            {/* Overload Warning Banner */}
+            {showOverloadWarning && (
+              <View className="bg-red-50 border-l-4 border-red-500 rounded-lg p-4 mb-4">
+                <View className="flex-row items-start gap-3">
+                  <Ionicons name="warning" size={20} color="#EF4444" />
+                  <View className="flex-1">
+                    <Text className="font-bold text-red-700 mb-1">Task Overload Alert</Text>
+                    <Text className="text-sm text-red-600">
+                      You have {memberTaskCount} incomplete task{memberTaskCount !== 1 ? 's' : ''} assigned to you. Your admin may have assigned too many tasks at once. Please communicate if you need support.
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            )}
+            
             {/* Title and Status */}
             <View className="flex-row items-center justify-between mb-4">
               <View className="flex-row items-center flex-1">
@@ -772,9 +819,52 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 <Text className="text-gray-600 ml-2 font-semibold">Created by</Text>
               </View>
               <Text className="text-gray-800">
-                {typeof task.createdBy === 'string' ? task.createdBy : 'Unknown'} • {new Date(task.createdAt).toLocaleDateString()}
+                {typeof task.createdBy === 'string' ? task.createdBy : 'Unknown'} • {(() => {
+                  try {
+                    const date = task.createdAt?.toDate ? task.createdAt.toDate() : new Date(task.createdAt);
+                    return date.toLocaleDateString();
+                  } catch (e) {
+                    return 'Date unavailable';
+                  }
+                })()}
               </Text>
             </View>
+
+            {/* Assigned Members */}
+            {task.assignedTo && task.assignedTo.length > 0 && (
+              <View className="border-t border-gray-100 pt-4 mb-4">
+                <View className="flex-row items-center mb-3">
+                  <Ionicons name="people-outline" size={18} color="#6B7280" />
+                  <Text className="text-gray-600 ml-2 font-semibold">Assigned to ({task.assignedTo.length})</Text>
+                </View>
+                <View className="gap-2">
+                  {members
+                    .filter(member => task.assignedTo.includes(member.uid))
+                    .map((member) => (
+                      <View key={member.uid} className="flex-row items-center gap-3 bg-yellow-50 rounded-lg p-3">
+                        {member.profileImage ? (
+                          <Image
+                            source={{ uri: member.profileImage }}
+                            className="w-8 h-8 rounded-full"
+                          />
+                        ) : (
+                          <View className="w-8 h-8 bg-yellow-200 rounded-full items-center justify-center">
+                            <Text className="text-yellow-700 font-bold text-xs">
+                              {member.name.charAt(0).toUpperCase()}
+                            </Text>
+                          </View>
+                        )}
+                        <View className="flex-1">
+                          <Text className="font-semibold text-gray-800">{member.name}</Text>
+                          {member.email && (
+                            <Text className="text-xs text-gray-500">{member.email}</Text>
+                          )}
+                        </View>
+                      </View>
+                    ))}
+                </View>
+              </View>
+            )}
 
             {/* Description with mention highlighting */}
             {task.description ? (

@@ -42,6 +42,16 @@ interface Group {
   members: string[];
 }
 
+// Group color mapping
+const groupColors = [
+  { bg: 'bg-red-100', text: 'text-red-800', sub: 'text-red-600', border: 'border-red-300' },
+  { bg: 'bg-blue-100', text: 'text-blue-800', sub: 'text-blue-600', border: 'border-blue-300' },
+  { bg: 'bg-green-100', text: 'text-green-800', sub: 'text-green-600', border: 'border-green-300' },
+  { bg: 'bg-purple-100', text: 'text-purple-800', sub: 'text-purple-600', border: 'border-purple-300' },
+  { bg: 'bg-pink-100', text: 'text-pink-800', sub: 'text-pink-600', border: 'border-pink-300' },
+  { bg: 'bg-indigo-100', text: 'text-indigo-800', sub: 'text-indigo-600', border: 'border-indigo-300' },
+];
+
 export default function CalendarScreen() {
   const router = useRouter();
   const auth = getAuth();
@@ -58,6 +68,10 @@ export default function CalendarScreen() {
   const [userGroups, setUserGroups] = useState<Group[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedDateTasks, setSelectedDateTasks] = useState<Task[]>([]);
+  
+  // Group filter state
+  const [selectedGroupId, setSelectedGroupId] = useState<string>('all');
+  const [showGroupPicker, setShowGroupPicker] = useState(false);
   
   // Get real current date on component mount
   useEffect(() => {
@@ -260,12 +274,24 @@ export default function CalendarScreen() {
     return tasks.filter((task) => {
       if (!task.deadline) return false;
       const taskDate = new Date(task.deadline);
-      return (
+      const isDateMatch = 
         taskDate.getDate() === date.getDate() &&
         taskDate.getMonth() === date.getMonth() &&
-        taskDate.getFullYear() === date.getFullYear()
-      );
+        taskDate.getFullYear() === date.getFullYear();
+      
+      // Filter by group if not "all"
+      if (selectedGroupId !== 'all') {
+        return isDateMatch && task.groupId === selectedGroupId;
+      }
+      
+      return isDateMatch;
     });
+  };
+
+  // Get color index for a group
+  const getGroupColorIndex = (groupId: string): number => {
+    const groupIndex = userGroups.findIndex(g => g.id === groupId);
+    return groupIndex >= 0 ? groupIndex % groupColors.length : 0;
   };
 
   // Convert task to calendar event
@@ -274,22 +300,31 @@ export default function CalendarScreen() {
     let textColor = 'text-blue-800';
     let subColor = 'text-blue-600';
     
-    switch (task.priority) {
-      case 'High':
-        color = 'bg-red-100';
-        textColor = 'text-red-800';
-        subColor = 'text-red-600';
-        break;
-      case 'Medium':
-        color = 'bg-yellow-100';
-        textColor = 'text-yellow-800';
-        subColor = 'text-yellow-600';
-        break;
-      case 'Low':
-        color = 'bg-green-100';
-        textColor = 'text-green-800';
-        subColor = 'text-green-600';
-        break;
+    // Use group color if "All Groups" is selected, otherwise use priority color
+    if (selectedGroupId === 'all') {
+      const colorIndex = getGroupColorIndex(task.groupId);
+      const groupColor = groupColors[colorIndex];
+      color = groupColor.bg;
+      textColor = groupColor.text;
+      subColor = groupColor.sub;
+    } else {
+      switch (task.priority) {
+        case 'High':
+          color = 'bg-red-100';
+          textColor = 'text-red-800';
+          subColor = 'text-red-600';
+          break;
+        case 'Medium':
+          color = 'bg-yellow-100';
+          textColor = 'text-yellow-800';
+          subColor = 'text-yellow-600';
+          break;
+        case 'Low':
+          color = 'bg-green-100';
+          textColor = 'text-green-800';
+          subColor = 'text-green-600';
+          break;
+      }
     }
     
     const taskDate = new Date(task.deadline);
@@ -299,9 +334,14 @@ export default function CalendarScreen() {
       hour12: true 
     });
     
+    const groupName = userGroups.find(g => g.id === task.groupId)?.name || 'Unknown';
+    const subtitleText = selectedGroupId === 'all' 
+      ? `${timeString} - ${groupName} • ${task.completed ? '✓ Completed' : 'Pending'}`
+      : `${timeString} - ${task.completed ? '✓ Completed' : 'Pending'} • ${task.priority} Priority`;
+    
     return {
       title: task.title,
-      subtitle: `${timeString} - ${task.completed ? '✓ Completed' : 'Pending'} • ${task.priority} Priority`,
+      subtitle: subtitleText,
       color: color,
       textColor: textColor,
       subColor: subColor,
@@ -389,6 +429,41 @@ export default function CalendarScreen() {
       </View>
 
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+        {/* Group Filter Dropdown */}
+        <View className="px-4 pt-4 pb-2">
+          <TouchableOpacity 
+            onPress={() => setShowGroupPicker(true)}
+            className="flex-row items-center justify-between bg-gray-50 rounded-lg p-3 border border-gray-200"
+          >
+            <View className="flex-row items-center flex-1">
+              <Ionicons name="filter" size={18} color="#6B7280" />
+              <Text className="ml-2 text-gray-700 font-medium">
+                {selectedGroupId === 'all' ? 'All Groups' : userGroups.find(g => g.id === selectedGroupId)?.name || 'Select Group'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-down" size={18} color="#9CA3AF" />
+          </TouchableOpacity>
+        </View>
+
+        {/* Group Color Legend - Show only when "All Groups" selected */}
+        {selectedGroupId === 'all' && userGroups.length > 0 && (
+          <View className="px-4 pb-3">
+            <Text className="text-xs text-gray-500 mb-2">Group Colors:</Text>
+            <View className="flex-row flex-wrap gap-2">
+              {userGroups.map((group, index) => {
+                const colorIndex = index % groupColors.length;
+                const color = groupColors[colorIndex];
+                return (
+                  <View key={group.id} className={`flex-row items-center rounded-full px-2 py-1 ${color.bg}`}>
+                    <View className={`w-2 h-2 rounded-full mr-1 ${color.text.replace('text', 'bg')}`} />
+                    <Text className={`text-xs ${color.text}`}>{group.name}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+        )}
+
         {/* Month and Year Navigation */}
         <View className="px-4 mb-4">
           {/* Month Row */}
@@ -551,9 +626,8 @@ export default function CalendarScreen() {
                         key={eventIndex} 
                         className={`${event.color} rounded px-3 py-1.5`}
                         onPress={() => {
-                          // Navigate to task details if needed
                           if (event.taskId) {
-                            // router.push(`/task/${event.taskId}`);
+                            router.push(`/task/${event.taskId}`);
                           }
                         }}
                       >
@@ -656,6 +730,68 @@ export default function CalendarScreen() {
                   className="max-h-96"
                 />
               )}
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Group Filter Modal */}
+      <Modal
+        visible={showGroupPicker}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowGroupPicker(false)}
+      >
+        <TouchableOpacity 
+          className="flex-1 bg-black/50"
+          activeOpacity={1}
+          onPress={() => setShowGroupPicker(false)}
+        >
+          <View className="flex-1 justify-end">
+            <TouchableOpacity 
+              activeOpacity={1}
+              className="bg-white rounded-t-3xl p-4"
+            >
+              <View className="flex-row justify-between items-center mb-4">
+                <Text className="text-lg font-bold text-gray-800">Select Group</Text>
+                <TouchableOpacity onPress={() => setShowGroupPicker(false)}>
+                  <Ionicons name="close" size={24} color="#6B7280" />
+                </TouchableOpacity>
+              </View>
+              
+              <FlatList
+                data={[{ id: 'all', name: 'All Groups' }, ...userGroups]}
+                keyExtractor={(item) => item.id}
+                renderItem={({ item, index }) => (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setSelectedGroupId(item.id);
+                      setShowGroupPicker(false);
+                      setSelectedDate(null);
+                      setSelectedDateTasks([]);
+                    }}
+                    className={`p-4 border-b border-gray-100 flex-row items-center ${
+                      selectedGroupId === item.id ? 'bg-blue-50' : ''
+                    }`}
+                  >
+                    {item.id !== 'all' && (
+                      <View 
+                        className={`w-4 h-4 rounded mr-3 ${groupColors[index % groupColors.length].bg}`}
+                      />
+                    )}
+                    <Text className={`text-base ${
+                      selectedGroupId === item.id ? 'text-blue-600 font-semibold' : 'text-gray-700'
+                    }`}>
+                      {item.name}
+                    </Text>
+                    {selectedGroupId === item.id && (
+                      <Ionicons name="checkmark" size={20} color="#3B82F6" className="ml-auto" />
+                    )}
+                  </TouchableOpacity>
+                )}
+                scrollEnabled={true}
+                className="max-h-96"
+              />
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
