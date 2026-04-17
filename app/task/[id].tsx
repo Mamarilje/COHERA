@@ -69,6 +69,28 @@ type TaskComment = {
   fileNames?: string[];
 };
 
+type TaskSubmission = {
+  id: string;
+  taskId: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  link?: string;
+  fileUrls?: string[];
+  fileNames?: string[];
+  photoUrls?: string[];
+  note: string;
+  status: 'Complete' | 'Progress';
+  createdAt: string;
+  profileImage?: string;
+  adminReview?: {
+    status: 'Approved' | 'Need Revise';
+    note?: string;
+    reviewedBy: string;
+    reviewedAt: string;
+  };
+};
+
 export default function TaskDetail() {
   const router = useRouter();
   const { id } = useLocalSearchParams();
@@ -78,8 +100,21 @@ export default function TaskDetail() {
   const [task, setTask] = useState<Task | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [comments, setComments] = useState<TaskComment[]>([]);
+  const [submissions, setSubmissions] = useState<TaskSubmission[]>([]);
+  const [activeTab, setActiveTab] = useState<'submissions' | 'discussion'>('submissions');
+  const [showSubmissionModal, setShowSubmissionModal] = useState(false);
+  const [submissionLink, setSubmissionLink] = useState('');
+  const [submissionNote, setSubmissionNote] = useState('');
+  const [submissionStatus, setSubmissionStatus] = useState<'Complete' | 'Progress'>('Progress');
+  const [submissionFiles, setSubmissionFiles] = useState<{ name: string; uri: string }[]>([]);
+  const [submissionPhotos, setSubmissionPhotos] = useState<{ name: string; uri: string }[]>([]);
   const [newComment, setNewComment] = useState('');
   const [commentFiles, setCommentFiles] = useState<{ name: string; uri: string }[]>([]);
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [selectedSubmissionForReview, setSelectedSubmissionForReview] = useState<TaskSubmission | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<'Approved' | 'Need Revise'>('Approved');
+  const [reviewNote, setReviewNote] = useState('');
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isAddingComment, setIsAddingComment] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -138,7 +173,9 @@ export default function TaskDetail() {
       } catch (error) {
         console.error('Error fetching creator:', error);
       }
-      taskData.createdBy = creatorName;
+      
+      // Store creator name separately, keep createdBy as UID for admin checks
+      (taskData as any).creatorName = creatorName;
       
       setTask(taskData);
 
@@ -221,6 +258,42 @@ export default function TaskDetail() {
       };
 
       fetchComments();
+      
+      // Fetch submissions
+      const fetchSubmissions = async () => {
+        try {
+          const submissionsQuery = query(
+            collection(firestore, 'submissions'),
+            where('taskId', '==', id)
+          );
+
+          const submissionsSnapshot = await getDocs(submissionsQuery);
+          const submissionsData = submissionsSnapshot.docs
+            .map((doc) => ({
+              id: doc.id,
+              taskId: doc.data().taskId,
+              userId: doc.data().userId,
+              userName: doc.data().userName,
+              userEmail: doc.data().userEmail,
+              link: doc.data().link,
+              fileUrls: doc.data().fileUrls,
+              fileNames: doc.data().fileNames,
+              photoUrls: doc.data().photoUrls,
+              note: doc.data().note,
+              status: doc.data().status,
+              createdAt: doc.data().createdAt,
+              profileImage: members.find(m => m.uid === doc.data().userId)?.profileImage,
+              adminReview: doc.data().adminReview,
+            }))
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+          setSubmissions(submissionsData);
+        } catch (error) {
+          console.error('Error fetching submissions:', error);
+        }
+      };
+
+      fetchSubmissions();
       
       // Check if current user has task overload
       if (taskData && taskData.assignedTo && taskData.assignedTo.includes(currentUser?.uid || '')) {
@@ -623,11 +696,25 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
         uploadedUrls = uploadedFiles;
         uploadedNames = commentFiles.map(f => f.name);
       }
+
+      // Fetch the actual user name from the database
+      let userName = currentUser?.displayName || 'Anonymous';
+      try {
+        if (currentUser?.uid) {
+          const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+          if (userDoc.exists()) {
+            userName = userDoc.data().name || userDoc.data().displayName || currentUser.displayName || 'Anonymous';
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching user name:', error);
+        // Fall back to displayName if fetch fails
+      }
       
       const commentData = {
         taskId: task.id,
         userId: currentUser?.uid || '',
-        userName: currentUser?.displayName || 'Anonymous',
+        userName: userName,
         userEmail: currentUser?.email || '',
         comment: newComment,
         createdAt: new Date().toISOString(),
@@ -652,6 +739,158 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
     } finally {
       setIsAddingComment(false);
     }
+  };
+
+  const handleAddSubmission = async () => {
+    if (!task || !submissionNote.trim()) {
+      Alert.alert('Error', 'Please add a note to your submission');
+      return;
+    }
+
+    setIsAddingComment(true);
+    
+    try {
+      let uploadedFileUrls: string[] = [];
+      let uploadedFileNames: string[] = [];
+      let uploadedPhotoUrls: string[] = [];
+      
+      if (submissionFiles.length > 0) {
+        const uploadedFiles = await uploadFiles(submissionFiles);
+        uploadedFileUrls = uploadedFiles;
+        uploadedFileNames = submissionFiles.map(f => f.name);
+      }
+      
+      if (submissionPhotos.length > 0) {
+        uploadedPhotoUrls = await uploadFiles(submissionPhotos);
+      }
+
+      // Fetch the actual user name from the database
+      let userName = currentUser?.displayName || 'Anonymous';
+      try {
+        if (currentUser?.uid) {
+          const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+          if (userDoc.exists()) {
+            userName = userDoc.data().name || userDoc.data().displayName || currentUser.displayName || 'Anonymous';
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching user name:', error);
+        // Fall back to displayName if fetch fails
+      }
+      
+      const submissionData: any = {
+        taskId: task.id,
+        userId: currentUser?.uid || '',
+        userName: userName,
+        userEmail: currentUser?.email || '',
+        note: submissionNote,
+        status: submissionStatus,
+        createdAt: new Date().toISOString(),
+        taskCreatedBy: task.createdBy || '',
+      };
+
+      // Only add optional fields if they have values
+      if (submissionLink.trim()) {
+        submissionData.link = submissionLink;
+      }
+      if (uploadedFileUrls.length > 0) {
+        submissionData.fileUrls = uploadedFileUrls;
+        submissionData.fileNames = uploadedFileNames;
+      }
+      if (uploadedPhotoUrls.length > 0) {
+        submissionData.photoUrls = uploadedPhotoUrls;
+      }
+      
+      const docRef = await addDoc(collection(firestore, 'submissions'), submissionData);
+      
+      const newSubmissionObj: TaskSubmission = {
+        id: docRef.id,
+        ...submissionData,
+        profileImage: members.find(m => m.uid === currentUser?.uid)?.profileImage,
+      };
+      setSubmissions(prev => [newSubmissionObj, ...prev]);
+      
+      setSubmissionLink('');
+      setSubmissionNote('');
+      setSubmissionStatus('Progress');
+      setSubmissionFiles([]);
+      setSubmissionPhotos([]);
+      setShowSubmissionModal(false);
+      
+      Alert.alert('Success', 'Your submission has been uploaded');
+      
+    } catch (error) {
+      console.error('Error adding submission:', error);
+      Alert.alert('Error', 'Failed to upload submission. Please try again.');
+    } finally {
+      setIsAddingComment(false);
+    }
+  };
+
+  const handleReviewSubmission = async () => {
+    if (!task || !selectedSubmissionForReview) {
+      Alert.alert('Error', 'No submission selected');
+      return;
+    }
+
+    setIsSubmittingReview(true);
+
+    try {
+      const reviewData = {
+        adminReview: {
+          status: reviewStatus,
+          note: reviewNote || undefined,
+          reviewedBy: currentUser?.uid || '',
+          reviewedAt: new Date().toISOString(),
+        },
+      };
+
+      // Update submission with admin review
+      await updateDoc(doc(firestore, 'submissions', selectedSubmissionForReview.id), reviewData);
+
+      // If admin approves, mark the task as completed for that user
+      if (reviewStatus === 'Approved') {
+        // Update the submission object locally
+        setSubmissions(prev =>
+          prev.map(sub =>
+            sub.id === selectedSubmissionForReview.id
+              ? { ...sub, adminReview: reviewData.adminReview }
+              : sub
+          )
+        );
+      } else {
+        // For revisions needed, just update the submission
+        setSubmissions(prev =>
+          prev.map(sub =>
+            sub.id === selectedSubmissionForReview.id
+              ? { ...sub, adminReview: reviewData.adminReview }
+              : sub
+          )
+        );
+      }
+
+      setShowReviewModal(false);
+      setSelectedSubmissionForReview(null);
+      setReviewStatus('Approved');
+      setReviewNote('');
+
+      Alert.alert(
+        'Success',
+        `Submission has been marked as "${reviewStatus}"${reviewNote ? ' with a note' : ''}`
+      );
+    } catch (error) {
+      console.error('Error reviewing submission:', error);
+      Alert.alert('Error', 'Failed to review submission. Please try again.');
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
+
+  const openReviewModal = (submission: TaskSubmission) => {
+    setSelectedSubmissionForReview(submission);
+    setReviewStatus(submission.adminReview?.status || 'Approved');
+    setReviewNote(submission.adminReview?.note || '');
+    setShowReviewModal(true);
   };
 
   const getPriorityColor = (priority: string) => {
@@ -819,7 +1058,7 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 <Text className="text-gray-600 ml-2 font-semibold">Created by</Text>
               </View>
               <Text className="text-gray-800">
-                {typeof task.createdBy === 'string' ? task.createdBy : 'Unknown'} • {(() => {
+                {typeof (task as any).creatorName === 'string' ? (task as any).creatorName : 'Unknown'} • {(() => {
                   try {
                     const date = task.createdAt?.toDate ? task.createdAt.toDate() : new Date(task.createdAt);
                     return date.toLocaleDateString();
@@ -870,7 +1109,9 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
             {task.description ? (
               <View className="border-t border-gray-100 pt-4 mb-4">
                 <Text className="text-gray-600 font-semibold mb-2">Description</Text>
-                {renderDescriptionWithMentions(task.description)}
+                <View>
+                  {renderDescriptionWithMentions(task.description)}
+                </View>
               </View>
             ) : null}
 
@@ -913,98 +1154,488 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
             )}
           </View>
 
-          {/* Comments Section */}
+          {/* Submissions and Discussion Tabs */}
           <View className="bg-white rounded-2xl p-6 shadow-sm">
-            <Text className="text-lg font-bold text-gray-800 mb-4">
-              Comments ({comments.length})
-            </Text>
-
-            {/* Comments List */}
-            <View className="space-y-4 mb-4">
-              {comments.length === 0 ? (
-                <Text className="text-gray-400 text-center py-4">No comments yet</Text>
-              ) : (
-                comments.map((comment) => (
-                  <View key={comment.id} className="bg-gray-50 rounded-xl p-4">
-                    <View className="flex-row items-center mb-2">
-                      <View className="w-8 h-8 bg-yellow-200 rounded-full items-center justify-center mr-2">
-                        <Text className="text-yellow-700 font-bold text-sm">
-                          {comment.userName?.charAt(0).toUpperCase() || 'U'}
-                        </Text>
-                      </View>
-                      <View className="flex-1">
-                        <Text className="font-semibold text-gray-800">{comment.userName}</Text>
-                        <Text className="text-xs text-gray-400">
-                          {new Date(comment.createdAt).toLocaleDateString()} • {new Date(comment.createdAt).toLocaleTimeString()}
-                        </Text>
-                      </View>
-                    </View>
-                    {comment.comment ? (
-                      <Text className="text-gray-700 ml-10">{comment.comment}</Text>
-                    ) : null}
-                    
-                    {/* Comment Attachments - Clickable to download */}
-                    {comment.fileUrls && comment.fileUrls.length > 0 && (
-                      <View className="ml-10 mt-2">
-                        {comment.fileUrls.map((url, idx) => {
-                          const fileName = comment.fileNames?.[idx] || `Attachment ${idx + 1}`;
-                          const isDownloading = downloadingFile === fileName;
-                          
-                          return (
-                            <TouchableOpacity
-                              key={idx}
-                              onPress={() => downloadFile(url, fileName)}
-                              disabled={isDownloading}
-                              className="flex-row items-center bg-white rounded-lg p-2 mt-1"
-                            >
-                              {isDownloading ? (
-                                <ActivityIndicator size="small" color="#EAB308" />
-                              ) : (
-                                <Ionicons name="download-outline" size={14} color="#EAB308" />
-                              )}
-                              <Text className="text-xs text-gray-600 ml-1" numberOfLines={1}>
-                                {fileName}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-                    )}
-                  </View>
-                ))
-              )}
+            {/* Tab Switcher */}
+            <View className="flex-row border-b border-gray-200 mb-4">
+              <TouchableOpacity
+                onPress={() => setActiveTab('submissions')}
+                className={`flex-1 pb-3 border-b-2 ${activeTab === 'submissions' ? 'border-yellow-400' : 'border-transparent'}`}
+              >
+                <Text className={`text-center font-semibold ${activeTab === 'submissions' ? 'text-yellow-400' : 'text-gray-400'}`}>
+                  Submissions ({submissions.length})
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setActiveTab('discussion')}
+                className={`flex-1 pb-3 border-b-2 ${activeTab === 'discussion' ? 'border-yellow-400' : 'border-transparent'}`}
+              >
+                <Text className={`text-center font-semibold ${activeTab === 'discussion' ? 'text-yellow-400' : 'text-gray-400'}`}>
+                  Discussion ({comments.length})
+                </Text>
+              </TouchableOpacity>
             </View>
 
-            {/* Add Comment Input */}
-            <View className="border-t border-gray-200 pt-4">
-              <TextInput
-                className="border border-gray-300 rounded-xl p-3 mb-3"
-                placeholder="Add a comment..."
-                value={newComment}
-                onChangeText={setNewComment}
-                multiline
-                placeholderTextColor="#9CA3AF"
-              />
-              
-              {commentFiles.length > 0 && (
-                <View className="mb-3">
-                  {commentFiles.map((file, index) => (
-                    <View key={index} className="flex-row items-center justify-between bg-gray-50 rounded-lg p-2 mb-1">
-                      <View className="flex-row items-center flex-1">
-                        <Ionicons name="document-text" size={16} color="#EAB308" />
-                        <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
-                          {file.name}
-                        </Text>
+            {/* SUBMISSIONS TAB */}
+            {activeTab === 'submissions' && (
+              <View>
+                <TouchableOpacity
+                  onPress={() => setShowSubmissionModal(true)}
+                  className="bg-yellow-400 rounded-xl p-4 mb-4 flex-row items-center justify-center"
+                >
+                  <Ionicons name="add-circle-outline" size={20} color="white" />
+                  <Text className="text-white font-semibold ml-2">Submit Your Work</Text>
+                </TouchableOpacity>
+
+                {submissions.length === 0 ? (
+                  <Text className="text-gray-400 text-center py-4">No submissions yet</Text>
+                ) : (
+                  submissions.map((submission) => (
+                    <View key={submission.id} className="bg-gray-50 rounded-xl p-4 mb-3 border border-gray-200">
+                      {/* Member Info Header */}
+                      <View className="flex-row items-center justify-between mb-3 pb-3 border-b border-gray-200">
+                        <View className="flex-row items-center flex-1">
+                          {submission.profileImage ? (
+                            <Image
+                              source={{ uri: submission.profileImage }}
+                              className="w-10 h-10 rounded-full mr-3"
+                            />
+                          ) : (
+                            <View className="w-10 h-10 bg-yellow-200 rounded-full items-center justify-center mr-3">
+                              <Text className="text-yellow-700 font-bold text-sm">
+                                {submission.userName?.charAt(0).toUpperCase() || 'U'}
+                              </Text>
+                            </View>
+                          )}
+                          <View className="flex-1">
+                            <Text className="text-base font-bold text-gray-900">
+                              {submission.userName || 'Anonymous'}
+                            </Text>
+                            <Text className="text-xs text-gray-500 mt-0.5">
+                              {new Date(submission.createdAt).toLocaleDateString()} at {new Date(submission.createdAt).toLocaleTimeString()}
+                            </Text>
+                          </View>
+                        </View>
+                        <View className="flex-row items-center gap-2">
+                          {task && currentUser?.uid === task.createdBy && (
+                            <TouchableOpacity
+                              onPress={() => openReviewModal(submission)}
+                              className="bg-blue-500 rounded-lg px-3 py-1.5 flex-row items-center"
+                            >
+                              <Ionicons name="checkmark-done" size={14} color="white" />
+                              <Text className="text-white text-xs font-semibold ml-1">Review</Text>
+                            </TouchableOpacity>
+                          )}
+                          <View className={`px-3 py-1.5 rounded-full ${submission.status === 'Complete' ? 'bg-green-100' : 'bg-blue-100'}`}>
+                            <Text className={`text-xs font-bold ${submission.status === 'Complete' ? 'text-green-700' : 'text-blue-700'}`}>
+                              {submission.status}
+                            </Text>
+                          </View>
+                        </View>
                       </View>
-                      <TouchableOpacity onPress={() => setCommentFiles(commentFiles.filter((_, i) => i !== index))}>
-                        <Ionicons name="close-circle" size={18} color="#EF4444" />
-                      </TouchableOpacity>
+
+                      {/* Note */}
+                      {submission.note && (
+                        <Text className="text-gray-700 mb-2">{submission.note}</Text>
+                      )}
+
+                      {/* Link */}
+                      {submission.link && (
+                        <TouchableOpacity
+                          onPress={() => Linking.openURL(submission.link!)}
+                          className="flex-row items-center bg-white rounded-lg p-2 mb-2"
+                        >
+                          <Ionicons name="link" size={16} color="#3B82F6" />
+                          <Text className="text-blue-500 ml-2 flex-1 underline" numberOfLines={1}>
+                            {submission.link}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+
+                      {/* Files */}
+                      {submission.fileUrls && submission.fileUrls.length > 0 && (
+                        <View className="mt-2 mb-2">
+                          {submission.fileUrls.map((url, idx) => {
+                            const fileName = submission.fileNames?.[idx] || `File ${idx + 1}`;
+                            const isDownloading = downloadingFile === fileName;
+                            
+                            return (
+                              <TouchableOpacity
+                                key={idx}
+                                onPress={() => downloadFile(url, fileName)}
+                                disabled={isDownloading}
+                                className="flex-row items-center bg-white rounded-lg p-2 mb-1"
+                              >
+                                {isDownloading ? (
+                                  <ActivityIndicator size="small" color="#EAB308" />
+                                ) : (
+                                  <Ionicons name="document-outline" size={16} color="#EAB308" />
+                                )}
+                                <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
+                                  {fileName}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                      )}
+
+                      {/* Photos */}
+                      {submission.photoUrls && submission.photoUrls.length > 0 && (
+                        <View className="mt-2">
+                          {submission.photoUrls.map((url, idx) => (
+                            <TouchableOpacity
+                              key={idx}
+                              onPress={() => Linking.openURL(url)}
+                              className="bg-white rounded-lg p-2 mb-1"
+                            >
+                              <Image
+                                source={{ uri: url }}
+                                className="w-full h-32 rounded-lg"
+                              />
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+
+                      {/* Admin Review Section */}
+                      {submission.adminReview && (
+                        <View className={`mt-3 p-3 rounded-lg ${submission.adminReview.status === 'Approved' ? 'bg-green-50 border border-green-200' : 'bg-orange-50 border border-orange-200'}`}>
+                          <View className="flex-row items-center mb-2">
+                            <Ionicons name={submission.adminReview.status === 'Approved' ? 'checkmark-circle' : 'alert-circle'} size={18} color={submission.adminReview.status === 'Approved' ? '#10B981' : '#F97316'} />
+                            <Text className={`font-semibold ml-2 ${submission.adminReview.status === 'Approved' ? 'text-green-700' : 'text-orange-700'}`}>
+                              {submission.adminReview.status === 'Approved' ? 'Approved' : 'Needs Revision'}
+                            </Text>
+                          </View>
+                          {submission.adminReview.note && (
+                            <Text className={`text-sm ${submission.adminReview.status === 'Approved' ? 'text-green-600' : 'text-orange-600'}`}>
+                              {submission.adminReview.note}
+                            </Text>
+                          )}
+                        </View>
+                      )}
                     </View>
-                  ))}
+                  ))
+                )}
+              </View>
+            )}
+
+            {/* DISCUSSION TAB */}
+            {activeTab === 'discussion' && (
+              <View>
+                {/* Comments List */}
+                <View className="space-y-4 mb-4">
+                  {comments.length === 0 ? (
+                    <Text className="text-gray-400 text-center py-4">No comments yet</Text>
+                  ) : (
+                    comments.map((comment) => (
+                      <View key={comment.id} className="bg-gray-50 rounded-xl p-4">
+                        <View className="flex-row items-center mb-2">
+                          <View className="w-8 h-8 bg-yellow-200 rounded-full items-center justify-center mr-2">
+                            <Text className="text-yellow-700 font-bold text-sm">
+                              {comment.userName?.charAt(0).toUpperCase() || 'U'}
+                            </Text>
+                          </View>
+                          <View className="flex-1">
+                            <Text className="font-semibold text-gray-800">{comment.userName}</Text>
+                            <Text className="text-xs text-gray-400">
+                              {new Date(comment.createdAt).toLocaleDateString()} • {new Date(comment.createdAt).toLocaleTimeString()}
+                            </Text>
+                          </View>
+                        </View>
+                        {comment.comment ? (
+                          <Text className="text-gray-700 ml-10">{comment.comment}</Text>
+                        ) : null}
+                        
+                        {/* Comment Attachments */}
+                        {comment.fileUrls && comment.fileUrls.length > 0 && (
+                          <View className="ml-10 mt-2">
+                            {comment.fileUrls.map((url, idx) => {
+                              const fileName = comment.fileNames?.[idx] || `Attachment ${idx + 1}`;
+                              const isDownloading = downloadingFile === fileName;
+                              
+                              return (
+                                <TouchableOpacity
+                                  key={idx}
+                                  onPress={() => downloadFile(url, fileName)}
+                                  disabled={isDownloading}
+                                  className="flex-row items-center bg-white rounded-lg p-2 mt-1"
+                                >
+                                  {isDownloading ? (
+                                    <ActivityIndicator size="small" color="#EAB308" />
+                                  ) : (
+                                    <Ionicons name="download-outline" size={14} color="#EAB308" />
+                                  )}
+                                  <Text className="text-xs text-gray-600 ml-1" numberOfLines={1}>
+                                    {fileName}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        )}
+                      </View>
+                    ))
+                  )}
+                </View>
+
+                {/* Add Comment Input */}
+                <View className="border-t border-gray-200 pt-4">
+                  <TextInput
+                    className="border border-gray-300 rounded-xl p-3 mb-3"
+                    placeholder="Add a comment..."
+                    value={newComment}
+                    onChangeText={setNewComment}
+                    multiline
+                    placeholderTextColor="#9CA3AF"
+                  />
+                  
+                  {commentFiles.length > 0 && (
+                    <View className="mb-3">
+                      {commentFiles.map((file, index) => (
+                        <View key={index} className="flex-row items-center justify-between bg-gray-50 rounded-lg p-2 mb-1">
+                          <View className="flex-row items-center flex-1">
+                            <Ionicons name="document-text" size={16} color="#EAB308" />
+                            <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
+                              {file.name}
+                            </Text>
+                          </View>
+                          <TouchableOpacity onPress={() => setCommentFiles(commentFiles.filter((_, i) => i !== index))}>
+                            <Ionicons name="close-circle" size={18} color="#EF4444" />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  
+                  <View className="flex-row justify-between items-center">
+                    <TouchableOpacity
+                      onPress={async () => {
+                        try {
+                          const result = await DocumentPicker.getDocumentAsync({
+                            multiple: true,
+                            type: '*/*',
+                          });
+                          
+                          if (result.assets && result.assets.length > 0) {
+                            const newFiles = result.assets.map((asset) => ({
+                              name: asset.name,
+                              uri: asset.uri,
+                            }));
+                            setCommentFiles([...commentFiles, ...newFiles]);
+                          }
+                        } catch (error) {
+                          console.error('Error picking files:', error);
+                        }
+                      }}
+                      className="flex-row items-center"
+                    >
+                      <Ionicons name="attach-outline" size={24} color="#EAB308" />
+                      <Text className="text-xs text-amber-500 ml-1">Add file</Text>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity
+                      onPress={handleAddComment}
+                      disabled={isAddingComment || (!newComment.trim() && commentFiles.length === 0)}
+                      className={`px-6 py-2 rounded-xl ${(newComment.trim() || commentFiles.length > 0) ? 'bg-yellow-400' : 'bg-gray-200'}`}
+                    >
+                      {isAddingComment ? (
+                        <ActivityIndicator size="small" color="white" />
+                      ) : (
+                        <Text className={`font-semibold ${(newComment.trim() || commentFiles.length > 0) ? 'text-white' : 'text-gray-400'}`}>
+                          Post
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
+      </ScrollView>
+
+      {/* Admin Review Modal */}
+      <Modal
+        visible={showReviewModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setShowReviewModal(false);
+          setSelectedSubmissionForReview(null);
+          setReviewStatus('Approved');
+          setReviewNote('');
+        }}
+      >
+        <View className="flex-1 bg-black/50 justify-end">
+          <View className="bg-white rounded-t-3xl p-6 max-h-[90%]">
+            <View className="flex-row items-center justify-between mb-6">
+              <Text className="text-xl font-bold text-gray-800">Review Submission</Text>
+              <TouchableOpacity onPress={() => {
+                setShowReviewModal(false);
+                setSelectedSubmissionForReview(null);
+                setReviewStatus('Approved');
+                setReviewNote('');
+              }}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Submitter Info */}
+              {selectedSubmissionForReview && (
+                <View className="bg-gray-50 rounded-lg p-4 mb-4">
+                  <Text className="text-sm text-gray-500 mb-1">Submitted by</Text>
+                  <Text className="font-semibold text-gray-800">{selectedSubmissionForReview.userName}</Text>
+                  <Text className="text-xs text-gray-400">
+                    {new Date(selectedSubmissionForReview.createdAt).toLocaleDateString()} • {new Date(selectedSubmissionForReview.createdAt).toLocaleTimeString()}
+                  </Text>
                 </View>
               )}
-              
-              <View className="flex-row justify-between items-center">
+
+              {/* Status Picker */}
+              <View className="mb-4">
+                <Text className="text-sm font-semibold text-gray-700 mb-3">Review Status</Text>
+                <View className="flex-row gap-3">
+                  <TouchableOpacity
+                    onPress={() => setReviewStatus('Approved')}
+                    className={`flex-1 p-4 rounded-lg border-2 items-center ${reviewStatus === 'Approved' ? 'bg-green-200 border-green-400' : 'bg-white border-gray-300'}`}
+                  >
+                    <Ionicons name="checkmark-circle" size={24} color={reviewStatus === 'Approved' ? '#10B981' : '#9CA3AF'} />
+                    <Text className={`text-sm font-semibold mt-2 ${reviewStatus === 'Approved' ? 'text-green-700' : 'text-gray-700'}`}>
+                      Approved
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setReviewStatus('Need Revise')}
+                    className={`flex-1 p-4 rounded-lg border-2 items-center ${reviewStatus === 'Need Revise' ? 'bg-orange-200 border-orange-400' : 'bg-white border-gray-300'}`}
+                  >
+                    <Ionicons name="alert-circle" size={24} color={reviewStatus === 'Need Revise' ? '#F97316' : '#9CA3AF'} />
+                    <Text className={`text-sm font-semibold mt-2 ${reviewStatus === 'Need Revise' ? 'text-orange-700' : 'text-gray-700'}`}>
+                      Need Revise
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Review Note */}
+              <View className="mb-4">
+                <Text className="text-sm font-semibold text-gray-700 mb-2">Feedback (Optional)</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-lg p-3 h-24"
+                  placeholder="Add feedback for the student..."
+                  value={reviewNote}
+                  onChangeText={setReviewNote}
+                  multiline
+                  placeholderTextColor="#9CA3AF"
+                />
+              </View>
+
+              {/* Submit Button */}
+              <TouchableOpacity
+                onPress={handleReviewSubmission}
+                disabled={isSubmittingReview}
+                className="bg-blue-500 rounded-lg p-4 flex-row items-center justify-center"
+              >
+                {isSubmittingReview ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-done" size={20} color="white" />
+                    <Text className="text-white font-semibold ml-2">Submit Review</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Submit Work Modal */}
+      <Modal
+        visible={showSubmissionModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setShowSubmissionModal(false);
+          setSubmissionLink('');
+          setSubmissionNote('');
+          setSubmissionStatus('Progress');
+          setSubmissionFiles([]);
+          setSubmissionPhotos([]);
+        }}
+      >
+        <View className="flex-1 bg-black/50 justify-end">
+          <View className="bg-white rounded-t-3xl p-6 max-h-[90%]">
+            <View className="flex-row items-center justify-between mb-6">
+              <Text className="text-xl font-bold text-gray-800">Submit Your Work</Text>
+              <TouchableOpacity onPress={() => {
+                setShowSubmissionModal(false);
+                setSubmissionLink('');
+                setSubmissionNote('');
+                setSubmissionStatus('Progress');
+                setSubmissionFiles([]);
+                setSubmissionPhotos([]);
+              }}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Link Input */}
+              <View className="mb-4">
+                <Text className="text-sm font-semibold text-gray-700 mb-2">Link (Optional)</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-lg p-3"
+                  placeholder="https://example.com"
+                  value={submissionLink}
+                  onChangeText={setSubmissionLink}
+                  placeholderTextColor="#9CA3AF"
+                />
+              </View>
+
+              {/* Note Input */}
+              <View className="mb-4">
+                <Text className="text-sm font-semibold text-gray-700 mb-2">Note</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-lg p-3 h-24"
+                  placeholder="Add a note about your submission..."
+                  value={submissionNote}
+                  onChangeText={setSubmissionNote}
+                  multiline
+                  placeholderTextColor="#9CA3AF"
+                />
+              </View>
+
+              {/* Status Picker */}
+              <View className="mb-4">
+                <Text className="text-sm font-semibold text-gray-700 mb-2">Status</Text>
+                <View className="flex-row gap-3">
+                  <TouchableOpacity
+                    onPress={() => setSubmissionStatus('Progress')}
+                    className={`flex-1 p-3 rounded-lg border ${submissionStatus === 'Progress' ? 'bg-blue-200 border-blue-400' : 'bg-white border-gray-300'}`}
+                  >
+                    <Text className={`text-center font-semibold ${submissionStatus === 'Progress' ? 'text-blue-700' : 'text-gray-700'}`}>
+                      Progress
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setSubmissionStatus('Complete')}
+                    className={`flex-1 p-3 rounded-lg border ${submissionStatus === 'Complete' ? 'bg-green-200 border-green-400' : 'bg-white border-gray-300'}`}
+                  >
+                    <Text className={`text-center font-semibold ${submissionStatus === 'Complete' ? 'text-green-700' : 'text-gray-700'}`}>
+                      Complete
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* File Upload */}
+              <View className="mb-4">
+                <View className="flex-row justify-between items-center mb-2">
+                  <Text className="text-sm font-semibold text-gray-700">Files (Optional)</Text>
+                  <Text className="text-xs text-gray-500">{submissionFiles.length} selected</Text>
+                </View>
                 <TouchableOpacity
                   onPress={async () => {
                     try {
@@ -1012,42 +1643,111 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                         multiple: true,
                         type: '*/*',
                       });
-                      
+
                       if (result.assets && result.assets.length > 0) {
                         const newFiles = result.assets.map((asset) => ({
                           name: asset.name,
                           uri: asset.uri,
                         }));
-                        setCommentFiles([...commentFiles, ...newFiles]);
+                        setSubmissionFiles([...submissionFiles, ...newFiles]);
                       }
                     } catch (error) {
                       console.error('Error picking files:', error);
                     }
                   }}
-                  className="flex-row items-center"
+                  className="border-2 border-dashed border-gray-300 rounded-lg p-4 items-center"
                 >
-                  <Ionicons name="attach-outline" size={24} color="#EAB308" />
-                  <Text className="text-xs text-amber-500 ml-1">Add file</Text>
+                  <Ionicons name="document-attach" size={24} color="#9CA3AF" />
+                  <Text className="text-gray-600 mt-2 text-sm">Tap to add files</Text>
                 </TouchableOpacity>
-                
-                <TouchableOpacity
-                  onPress={handleAddComment}
-                  disabled={isAddingComment || (!newComment.trim() && commentFiles.length === 0)}
-                  className={`px-6 py-2 rounded-xl ${(newComment.trim() || commentFiles.length > 0) ? 'bg-yellow-400' : 'bg-gray-200'}`}
-                >
-                  {isAddingComment ? (
-                    <ActivityIndicator size="small" color="white" />
-                  ) : (
-                    <Text className={`font-semibold ${(newComment.trim() || commentFiles.length > 0) ? 'text-white' : 'text-gray-400'}`}>
-                      Post
-                    </Text>
-                  )}
-                </TouchableOpacity>
+
+                {submissionFiles.length > 0 && (
+                  <View className="mt-3">
+                    {submissionFiles.map((file, index) => (
+                      <View key={index} className="flex-row items-center justify-between bg-gray-50 rounded-lg p-2 mb-1">
+                        <View className="flex-row items-center flex-1">
+                          <Ionicons name="document-text" size={16} color="#EAB308" />
+                          <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
+                            {file.name}
+                          </Text>
+                        </View>
+                        <TouchableOpacity onPress={() => setSubmissionFiles(submissionFiles.filter((_, i) => i !== index))}>
+                          <Ionicons name="close-circle" size={18} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </View>
-            </View>
+
+              {/* Photo Upload */}
+              <View className="mb-4">
+                <View className="flex-row justify-between items-center mb-2">
+                  <Text className="text-sm font-semibold text-gray-700">Photos (Optional)</Text>
+                  <Text className="text-xs text-gray-500">{submissionPhotos.length} selected</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      const result = await DocumentPicker.getDocumentAsync({
+                        multiple: true,
+                        type: 'image/*',
+                      });
+
+                      if (result.assets && result.assets.length > 0) {
+                        const newPhotos = result.assets.map((asset) => ({
+                          name: asset.name,
+                          uri: asset.uri,
+                        }));
+                        setSubmissionPhotos([...submissionPhotos, ...newPhotos]);
+                      }
+                    } catch (error) {
+                      console.error('Error picking photos:', error);
+                    }
+                  }}
+                  className="border-2 border-dashed border-gray-300 rounded-lg p-4 items-center"
+                >
+                  <Ionicons name="image" size={24} color="#9CA3AF" />
+                  <Text className="text-gray-600 mt-2 text-sm">Tap to add photos</Text>
+                </TouchableOpacity>
+
+                {submissionPhotos.length > 0 && (
+                  <View className="mt-3">
+                    {submissionPhotos.map((photo, index) => (
+                      <View key={index} className="flex-row items-center justify-between bg-gray-50 rounded-lg p-2 mb-1">
+                        <View className="flex-row items-center flex-1">
+                          <Ionicons name="image" size={16} color="#EAB308" />
+                          <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
+                            {photo.name}
+                          </Text>
+                        </View>
+                        <TouchableOpacity onPress={() => setSubmissionPhotos(submissionPhotos.filter((_, i) => i !== index))}>
+                          <Ionicons name="close-circle" size={18} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              {/* Submit Button */}
+              <TouchableOpacity
+                onPress={handleAddSubmission}
+                disabled={isAddingComment || !submissionNote.trim()}
+                className={`p-4 rounded-xl mb-4 ${submissionNote.trim() ? 'bg-yellow-400' : 'bg-gray-200'}`}
+              >
+                {isAddingComment ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <Text className={`text-center font-semibold ${submissionNote.trim() ? 'text-white' : 'text-gray-400'}`}>
+                    Submit Work
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
           </View>
         </View>
-      </ScrollView>
+      </Modal>
 
       {/* Edit Task Modal */}
       <Modal
