@@ -69,6 +69,7 @@ type Task = {
   deadline: string;
   assignedTo: string[];
   completed: boolean;
+  completedBy?: string[]; // Track which assigned members completed it
   createdBy: string;
   createdAt: any;
   fileUrls?: string[];
@@ -186,6 +187,7 @@ export default function GroupDetails() {
             deadline: data.deadline || '',
             assignedTo: data.assignedTo || [],
             completed: data.completed || false,
+            completedBy: data.completedBy || [],
             createdBy: data.createdBy || '',
             createdAt: data.createdAt,
             fileUrls: data.fileUrls || [],
@@ -552,7 +554,9 @@ export default function GroupDetails() {
   const getMemberContributions = () => {
     return members.map(member => {
       const assignedTasks = tasks.filter(t => t.assignedTo.includes(member.uid));
-      const completed = assignedTasks.filter(t => t.completed).length;
+      const completed = assignedTasks.filter(t => 
+        t.completed || t.completedBy?.includes(member.uid)
+      ).length;
       const total = assignedTasks.length;
       const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
 
@@ -680,23 +684,23 @@ export default function GroupDetails() {
                     >
                       <View className="flex-row items-start justify-between">
                         <View className="flex-row items-start flex-1">
-                          <TouchableOpacity 
-                            onPress={(e) => {
-                              e.stopPropagation();
-                              toggleTaskComplete(task.id, task.completed);
-                            }}
-                            className="mt-1"
-                          >
-                            <Ionicons 
-                              name={task.completed ? 'checkbox' : 'checkbox-outline'} 
-                              size={20} 
-                              color={task.completed ? '#22C55E' : '#9CA3AF'} 
-                            />
-                          </TouchableOpacity>
-                          <View className="ml-3 flex-1">
-                            <Text className={`font-semibold ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
-                              {task.title}
-                            </Text>
+                          <View className="flex-1">
+                            <View className="flex-row items-center gap-2 mb-1">
+                              <Text className={`font-semibold ${
+                                task.assignedTo.includes(currentUser?.uid || '') && 
+                                (task.completed || task.completedBy?.includes(currentUser?.uid || ''))
+                                  ? 'line-through text-gray-400' 
+                                  : 'text-gray-800'
+                              }`}>
+                                {task.title}
+                              </Text>
+                              {task.assignedTo.includes(currentUser?.uid || '') && 
+                               (task.completed || task.completedBy?.includes(currentUser?.uid || '')) && (
+                                <View className="bg-green-100 px-2 py-0.5 rounded">
+                                  <Ionicons name="checkmark-circle" size={14} color="#22C55E" />
+                                </View>
+                              )}
+                            </View>
                             {task.description ? (
                               <Text className="text-xs text-gray-500 mt-1" numberOfLines={2}>
                                 {task.description}

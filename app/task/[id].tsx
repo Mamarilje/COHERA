@@ -17,7 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { getAuth } from 'firebase/auth';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import {
   doc,
@@ -43,6 +43,7 @@ type Task = {
   deadline: string;
   assignedTo: string[];
   completed: boolean;
+  completedBy?: string[]; // Track which assigned members completed it
   createdBy: string;
   createdAt: any;
   fileUrls?: string[];
@@ -144,6 +145,10 @@ export default function TaskDetail() {
   const [editFiles, setEditFiles] = useState<{ name: string; uri: string; url?: string }[]>([]);
 
   const [refreshing, setRefreshing] = useState(false);
+  
+  // Task completion confirmation modal state
+  const [showCompleteConfirmModal, setShowCompleteConfirmModal] = useState(false);
+  const [isMarkingComplete, setIsMarkingComplete] = useState(false);
 
   useEffect(() => {
     fetchTaskDetails();
@@ -334,14 +339,31 @@ export default function TaskDetail() {
   const toggleTaskComplete = async () => {
     if (!task) return;
     
+    // Only admin can mark tasks as complete
+    if (currentUser?.uid !== task.createdBy) {
+      Alert.alert('Error', 'Only the task creator can mark it as complete');
+      return;
+    }
+    
     try {
+      setIsMarkingComplete(true);
+      
+      // Add current user to completedBy array
+      const completedBy = task.completedBy || [];
+      
       await updateDoc(doc(db, 'tasks', task.id), {
-        completed: !task.completed,
+        completedBy: completedBy,
+        completed: true, // Mark global task as complete when admin manually completes it
       });
-      setTask({ ...task, completed: !task.completed });
+      
+      setTask({ ...task, completed: true, completedBy });
+      setShowCompleteConfirmModal(false);
+      Alert.alert('Success', 'Task marked as complete');
     } catch (error) {
       console.error('Error updating task:', error);
-      Alert.alert('Error', 'Failed to update task');
+      Alert.alert('Error', 'Failed to mark task as complete');
+    } finally {
+      setIsMarkingComplete(false);
     }
   };
 
@@ -465,6 +487,54 @@ export default function TaskDetail() {
   };
 
 
+// Helper function to download with retry logic
+const downloadWithRetry = async (url: string, filePath: string, maxRetries: number = 3): Promise<any> => {
+  let lastError: any;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      console.log(`Download attempt ${attempt + 1}/${maxRetries} for: ${filePath}`);
+      const result = await FileSystem.downloadAsync(url, filePath);
+      return result;
+    } catch (error) {
+      lastError = error;
+      console.error(`Download attempt ${attempt + 1} failed:`, error);
+      
+      if (attempt < maxRetries - 1) {
+        // Exponential backoff: 1s, 2s, 4s
+        const delayMs = Math.pow(2, attempt) * 1000;
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  
+  throw lastError;
+};
+
+// Helper function to validate file size before download
+const validateFileSize = async (fileUrl: string, maxSizeMB: number = 200): Promise<boolean> => {
+  try {
+    const response = await fetch(fileUrl, { method: 'HEAD' });
+    const contentLength = response.headers.get('content-length');
+    
+    if (contentLength) {
+      const fileSizeMB = parseInt(contentLength) / (1024 * 1024);
+      if (fileSizeMB > maxSizeMB) {
+        Alert.alert(
+          'File Too Large',
+          `File size is ${fileSizeMB.toFixed(2)}MB. Maximum allowed is ${maxSizeMB}MB.`,
+          [{ text: 'OK' }]
+        );
+        return false;
+      }
+    }
+    return true;
+  } catch (error) {
+    console.log('Could not validate file size (continuing anyway):', error);
+    return true; // Continue if validation fails
+  }
+};
+
 const downloadFile = async (fileUrl: string, fileName: string) => {
   if (!fileUrl) {
     Alert.alert('Error', 'No file URL provided');
@@ -484,6 +554,13 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       return;
     }
 
+    // Validate file size first
+    const isValidSize = await validateFileSize(fileUrl, 200);
+    if (!isValidSize) {
+      setDownloadingFile(null);
+      return;
+    }
+
     const isSharingAvailable = await Sharing.isAvailableAsync();
 
     if (!isSharingAvailable) {
@@ -497,87 +574,189 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       return;
     }
 
-    const cacheDir = (FileSystem as any).documentDirectory || (FileSystem as any).cacheDirectory || '';
-    let downloadDir = cacheDir ? cacheDir + 'Download/' : '';
+    // Get directories with proper fallback for Expo Go
+    let downloadDir = '';
+    let useBasePath = false;
 
-    try {
-      const dirInfo = await FileSystem.getInfoAsync(downloadDir);
-      if (!dirInfo.exists) {
-        await FileSystem.makeDirectoryAsync(downloadDir, {
-          intermediates: true,
-        });
+    // Try to access Downloads folder first (for physical devices)
+    if (Platform.OS === 'android') {
+      try {
+        // Try common Android Downloads path
+        const downloadsPath = '/storage/emulated/0/Download/';
+        console.log('Trying Android Downloads path:', downloadsPath);
+        downloadDir = downloadsPath;
+      } catch (e) {
+        console.log('Android Downloads path error:', e);
       }
-    } catch (error) {
-      console.error('Error creating directory:', error);
-      downloadDir = cacheDir;
     }
+
+    // Fallback to document directory
+    if (!downloadDir) {
+      try {
+        const docDir = FileSystem.documentDirectory;
+        console.log('documentDirectory:', docDir);
+        if (docDir && docDir.trim() !== '') {
+          downloadDir = docDir;
+        }
+      } catch (e) {
+        console.log('documentDirectory error:', e);
+      }
+    }
+
+    // Fallback to cache directory
+    if (!downloadDir) {
+      try {
+        const cacheDir = FileSystem.cacheDirectory;
+        console.log('cacheDirectory:', cacheDir);
+        if (cacheDir && cacheDir.trim() !== '') {
+          downloadDir = cacheDir;
+        }
+      } catch (e) {
+        console.log('cacheDirectory error:', e);
+      }
+    }
+
+    // Fallback to temporary directory
+    if (!downloadDir) {
+      try {
+        const tempDir = (FileSystem as any).temporaryDirectory;
+        console.log('temporaryDirectory:', tempDir);
+        if (tempDir && tempDir.trim() !== '') {
+          downloadDir = tempDir;
+        }
+      } catch (e) {
+        console.log('temporaryDirectory error:', e);
+      }
+    }
+
+    // Try to use raw temp path as last resort
+    if (!downloadDir) {
+      console.log('Trying raw temp path approach');
+      downloadDir = '/tmp/';
+      useBasePath = true;
+    }
+
+    console.log('Final downloadDir:', downloadDir, 'useBasePath:', useBasePath);
 
     const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const uniqueFileName = `${Date.now()}_${safeFileName}`;
-    const filePath = downloadDir + uniqueFileName;
-
-    console.log('Downloading to:', filePath);
-
-    const downloadResult = await FileSystem.downloadAsync(fileUrl, filePath);
-
-    if (downloadResult.status === 200) {
-      console.log('Download completed successfully');
-
-      Alert.alert(
-        'Download Complete',
-        `${fileName} has been downloaded successfully.`,
-        [
-          { text: 'Close', style: 'cancel' },
-          {
-            text: 'Open',
-            onPress: async () => {
-              try {
-                await Sharing.shareAsync(filePath, {
-                  mimeType: getMimeType(fileName),
-                  dialogTitle: `Open ${fileName}`,
-                });
-              } catch (error) {
-                console.error('Error sharing file:', error);
-                Alert.alert('Error', 'Could not open the file');
-              }
-            },
-          },
-        ]
-      );
+    
+    // Create file path
+    let filePath = '';
+    if (useBasePath) {
+      filePath = uniqueFileName; // Simple filename for /tmp
     } else {
-      throw new Error(`Download failed with status: ${downloadResult.status}`);
+      filePath = downloadDir + uniqueFileName;
+    }
+
+    console.log('File will be saved to:', filePath);
+    console.log('Safe file name:', safeFileName);
+
+    try {
+      // Try to download the file
+      const downloadResult = await downloadWithRetry(fileUrl, filePath, 3);
+
+      if (downloadResult.status === 200) {
+        console.log('Download completed successfully');
+        console.log('File saved at:', filePath);
+
+        // If we used base path, we need to get the full path for sharing
+        let fullFilePath = filePath;
+        if (useBasePath && downloadDir) {
+          fullFilePath = downloadDir + filePath;
+        }
+
+        // Check if saved to Downloads folder
+        const isInDownloads = downloadDir && downloadDir.includes('Download');
+
+        // For Android, use share to allow saving
+        if (Platform.OS === 'android') {
+          try {
+            // If already in Downloads folder, just show success
+            if (isInDownloads) {
+              Alert.alert(
+                '✅ Download Complete',
+                `${fileName}\n\nFile saved to your Downloads folder.`,
+                [
+                  { text: 'OK', style: 'default' },
+                  {
+                    text: 'Open in Files',
+                    onPress: () => {
+                      // Try to open file manager
+                      Linking.openURL('content://com.android.externalstorage.documents/root/Download');
+                    },
+                  },
+                ]
+              );
+            } else {
+              // Show share dialog to save to Downloads
+              await Sharing.shareAsync(fullFilePath, {
+                mimeType: getMimeType(fileName),
+                dialogTitle: `Save ${fileName} to Downloads`,
+              });
+              
+              Alert.alert(
+                'Download Successful',
+                `${fileName} is ready to save.\n\nTap "Save" to add it to your Downloads folder.`,
+                [{ text: 'OK' }]
+              );
+            }
+          } catch (shareError) {
+            console.error('Share error:', shareError);
+            Alert.alert(
+              'Download Successful',
+              `${fileName} has been downloaded and saved to your device.`,
+              [{ text: 'OK' }]
+            );
+          }
+        } else {
+          // iOS
+          Alert.alert(
+            'Download Complete',
+            `${fileName} downloaded successfully.\n\nTap "Open" to view the file.`,
+            [
+              { text: 'Close', style: 'cancel' },
+              {
+                text: 'Open',
+                onPress: async () => {
+                  try {
+                    await Sharing.shareAsync(fullFilePath, {
+                      mimeType: getMimeType(fileName),
+                      dialogTitle: `Open ${fileName}`,
+                    });
+                  } catch (error) {
+                    console.error('Error opening file:', error);
+                    Alert.alert('Error', 'Could not open the file');
+                  }
+                },
+              },
+            ]
+          );
+        }
+      } else {
+        throw new Error(`Download failed with status: ${downloadResult.status}`);
+      }
+    } catch (downloadError) {
+      console.error('Download error:', downloadError);
+      throw downloadError; // Re-throw to be caught by outer catch
     }
   } catch (error: any) {
     console.error('Download error details:', error);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
 
-    try {
-      const canOpen = await Linking.canOpenURL(fileUrl);
-      if (canOpen) {
-        Alert.alert(
-          'Download Failed',
-          'Would you like to open the file in browser instead?',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Open in Browser',
-              onPress: () => Linking.openURL(fileUrl),
-            },
-          ]
-        );
-      } else {
-        Alert.alert(
-          'Download Failed',
-          `Could not download "${fileName}". ${
-            error.message || 'Please try again.'
-          }`
-        );
-      }
-    } catch {
-      Alert.alert(
-        'Download Failed',
-        `Could not download "${fileName}". Please check your internet connection and try again.`
-      );
-    }
+    // Suggest browser fallback since directories weren't available
+    Alert.alert(
+      'Download Not Available',
+      'Your device does not support local file saving. You can open the file in your browser instead, where you can save it normally.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Open in Browser',
+          onPress: () => Linking.openURL(fileUrl),
+        },
+      ]
+    );
   } finally {
     setDownloadingFile(null);
   }
@@ -848,8 +1027,24 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       // Update submission with admin review
       await updateDoc(doc(firestore, 'submissions', selectedSubmissionForReview.id), reviewData);
 
-      // If admin approves, mark the task as completed for that user
+      // If admin approves, add the submitting user to the completedBy array
       if (reviewStatus === 'Approved') {
+        const completedBy = task.completedBy || [];
+        const submittingUserId = selectedSubmissionForReview.userId;
+        
+        // Add user to completedBy if not already there
+        if (!completedBy.includes(submittingUserId)) {
+          completedBy.push(submittingUserId);
+          
+          // Update task with the new completedBy array
+          await updateDoc(doc(db, 'tasks', task.id), {
+            completedBy: completedBy,
+          });
+          
+          // Update the task locally
+          setTask({ ...task, completedBy });
+        }
+        
         // Update the submission object locally
         setSubmissions(prev =>
           prev.map(sub =>
@@ -876,7 +1071,7 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
 
       Alert.alert(
         'Success',
-        `Submission has been marked as "${reviewStatus}"${reviewNote ? ' with a note' : ''}`
+        `Submission has been marked as "${reviewStatus}"${reviewNote ? ' with a note' : ''}${reviewStatus === 'Approved' ? ' - Member task marked as complete' : ''}`
       );
     } catch (error) {
       console.error('Error reviewing submission:', error);
@@ -1009,19 +1204,29 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
             )}
             
             {/* Title and Status */}
-            <View className="flex-row items-center justify-between mb-4">
-              <View className="flex-row items-center flex-1">
-                <TouchableOpacity onPress={toggleTaskComplete} className="mr-3">
-                  <Ionicons 
-                    name={task.completed ? 'checkbox' : 'checkbox-outline'} 
-                    size={28} 
-                    color={task.completed ? '#22C55E' : '#9CA3AF'} 
-                  />
-                </TouchableOpacity>
+            <View className="mb-4">
+              <View className="flex-row items-center justify-between mb-4">
                 <Text className={`text-2xl font-bold flex-1 ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
                   {task.title}
                 </Text>
+                {task.completed && (
+                  <View className="bg-green-100 px-3 py-1 rounded-full ml-2 flex-row items-center gap-1">
+                    <Ionicons name="checkmark-circle" size={16} color="#22C55E" />
+                    <Text className="text-green-700 font-semibold text-xs">Completed</Text>
+                  </View>
+                )}
               </View>
+              
+              {/* Only show "Mark as Complete" button if user is the admin (task creator) */}
+              {!task.completed && currentUser?.uid === task.createdBy && (
+                <TouchableOpacity 
+                  onPress={() => setShowCompleteConfirmModal(true)}
+                  className="bg-green-500 rounded-lg py-2 px-4 flex-row items-center justify-center"
+                >
+                  <Ionicons name="checkmark-done" size={18} color="white" />
+                  <Text className="text-white font-semibold ml-2">Mark as Complete</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             {/* Status Badge */}
@@ -2276,6 +2481,56 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 className="flex-1 bg-yellow-400 rounded-lg py-3"
               >
                 <Text className="text-center text-white font-semibold">Confirm</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Task Completion Confirmation Modal */}
+      <Modal
+        visible={showCompleteConfirmModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowCompleteConfirmModal(false)}
+      >
+        <View className="flex-1 justify-center items-center bg-black/50">
+          <View className="bg-white rounded-2xl p-6 w-[85%]">
+            <View className="items-center mb-4">
+              <View className="bg-green-100 rounded-full p-4 mb-4">
+                <Ionicons name="checkmark-circle" size={40} color="#22C55E" />
+              </View>
+              <Text className="text-xl font-bold text-gray-800 text-center mb-2">
+                Complete Task?
+              </Text>
+              <Text className="text-base font-semibold text-gray-700 mb-1">
+                {task?.title}
+              </Text>
+            </View>
+
+            <View className="bg-green-50 rounded-lg p-3 mb-6">
+              <Text className="text-sm text-gray-700 text-center">
+                Are you sure you want to mark this task as complete? This action cannot be undone.
+              </Text>
+            </View>
+
+            <View className="flex-row justify-end gap-3">
+              <TouchableOpacity
+                onPress={() => setShowCompleteConfirmModal(false)}
+                className="px-5 py-2 rounded-lg border border-gray-300"
+              >
+                <Text className="text-gray-700 font-semibold">No, Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={toggleTaskComplete}
+                disabled={isMarkingComplete}
+                className={`px-5 py-2 rounded-lg ${isMarkingComplete ? 'bg-green-300' : 'bg-green-500'}`}
+              >
+                {isMarkingComplete ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text className="text-white font-semibold">Yes, Complete</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
