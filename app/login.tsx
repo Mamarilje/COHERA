@@ -19,9 +19,9 @@ type CheckItemProps = {
 
 function CheckItem({ met, label }: CheckItemProps) {
   return (
-    <View className="flex-row items-center mb-1">
+    <View className="flex-row items-center mb-2">
       <Text
-        className={`mr-2 font-bold ${met ? "text-green-500" : "text-gray-400"}`}
+        className={`mr-2 font-bold text-lg ${met ? "text-green-500" : "text-gray-400"}`}
       >
         {met ? "✓" : "○"}
       </Text>
@@ -32,11 +32,93 @@ function CheckItem({ met, label }: CheckItemProps) {
   );
 }
 
+function EmailValidationTooltip({
+  visible,
+  emailFilled,
+  emailValid,
+}: any) {
+  if (!visible) return null;
+
+  return (
+    <View className="absolute top-full left-0 mt-2 z-50">
+      {/* Pointer triangle */}
+      <View className="absolute -top-2 left-10 w-4 h-4 bg-white rotate-45 border-l border-t border-gray-300" />
+
+      {/* Tooltip box */}
+      <View className="bg-white border border-gray-300 rounded-xl px-4 py-4 shadow-lg min-w-[320px]">
+        <View className="flex-row items-start">
+          {/* Warning icon box */}
+          <View className="w-10 h-10 rounded-md bg-yellow-400 items-center justify-center mr-4">
+            <Text className="text-white font-bold text-xl">!</Text>
+          </View>
+
+          <View className="flex-1">
+            <Text className="text-sm font-semibold text-orange-600 mb-3">
+              Email Requirements:
+            </Text>
+
+            <CheckItem met={emailFilled} label="Email is filled in" />
+            <CheckItem
+              met={emailValid}
+              label="Valid email format (e.g. user@email.com)"
+            />
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function PasswordValidationTooltip({
+  visible,
+  passwordFilled,
+  passwordLongEnough,
+  passwordHasUppercase,
+  passwordHasLowercase,
+  passwordHasNumber,
+  passwordHasSpecial,
+  passwordNoSpaces,
+}: any) {
+  if (!visible) return null;
+
+  return (
+    <View className="absolute top-full left-0 mt-2 z-50">
+      {/* Pointer triangle */}
+      <View className="absolute -top-2 left-10 w-4 h-4 bg-white rotate-45 border-l border-t border-gray-300" />
+
+      {/* Tooltip box */}
+      <View className="bg-white border border-gray-300 rounded-xl px-4 py-4 shadow-lg min-w-[350px]">
+        <View className="flex-row items-start">
+          {/* Warning icon box */}
+          <View className="w-10 h-10 rounded-md bg-yellow-400 items-center justify-center mr-4">
+            <Text className="text-white font-bold text-xl">!</Text>
+          </View>
+
+          <View className="flex-1">
+            <Text className="text-sm font-semibold text-orange-600 mb-3">
+              Password Requirements:
+            </Text>
+
+            <CheckItem met={passwordFilled} label="Password is filled in" />
+            <CheckItem met={passwordLongEnough} label="At least 8 characters" />
+            <CheckItem met={passwordHasUppercase} label="At least one uppercase letter (A-Z)" />
+            <CheckItem met={passwordHasLowercase} label="At least one lowercase letter (a-z)" />
+            <CheckItem met={passwordHasNumber} label="At least one number (0-9)" />
+            <CheckItem met={passwordHasSpecial} label="At least one special character (!@#$%...)" />
+            <CheckItem met={passwordNoSpaces} label="No spaces allowed" />
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [focusedField, setFocusedField] = useState<"email" | "password" | null>(null);
 
   // ✅ Email checks
   const emailFilled = email.trim().length > 0;
@@ -111,57 +193,61 @@ export default function Login() {
         <Text className="text-red-500 text-center mb-4">{error}</Text>
       ) : null}
 
-      {/* Email */}
-      <TextInput
-        placeholder="Email"
-        value={email}
-        onChangeText={setEmail}
-        editable={!loading}
-        autoCapitalize="none"
-        keyboardType="email-address"
-        className="border p-4 rounded-xl border-gray-300"
-      />
-      <View className="px-1 pt-1 mb-4">
-        <CheckItem met={emailFilled} label="Email is filled in" />
-        <CheckItem
-          met={emailValid}
-          label="Valid email format (e.g. user@email.com)"
-        />
+      {/* Wrapper with higher z-index for tooltip overlay */}
+      <View style={{ zIndex: focusedField === "email" ? 100 : 1 }}>
+        <View className="relative">
+          <TextInput
+            placeholder="Email"
+            value={email}
+            onChangeText={setEmail}
+            onFocus={() => setFocusedField("email")}
+            onBlur={() => setFocusedField(null)}
+            editable={!loading}
+            autoCapitalize="none"
+            keyboardType="email-address"
+            className="border p-4 rounded-xl border-gray-300 bg-white"
+          />
+          
+          <EmailValidationTooltip 
+            visible={focusedField === "email"}
+            emailFilled={emailFilled}
+            emailValid={emailValid}
+          />
+        </View>
       </View>
 
-      {/* Password */}
-      <TextInput
-        placeholder="Password"
-        value={password}
-        onChangeText={setPassword}
-        editable={!loading}
-        secureTextEntry
-        className="border p-4 rounded-xl border-gray-300"
-      />
-      <View className="px-1 pt-1 mb-2">
-        <CheckItem met={passwordFilled} label="Password is filled in" />
-        <CheckItem met={passwordLongEnough} label="At least 8 characters" />
-        <CheckItem
-          met={passwordHasUppercase}
-          label="At least one uppercase letter (A-Z)"
-        />
-        <CheckItem
-          met={passwordHasLowercase}
-          label="At least one lowercase letter (a-z)"
-        />
-        <CheckItem met={passwordHasNumber} label="At least one number (0-9)" />
-        <CheckItem
-          met={passwordHasSpecial}
-          label="At least one special character (!@#$%...)"
-        />
-        <CheckItem met={passwordNoSpaces} label="No spaces allowed" />
+      {/* Password wrapper with proper z-index handling */}
+      <View style={{ zIndex: focusedField === "password" ? 100 : 1, marginTop: 24 }}>
+        <View className="relative">
+          <TextInput
+            placeholder="Password"
+            value={password}
+            onChangeText={setPassword}
+            onFocus={() => setFocusedField("password")}
+            onBlur={() => setFocusedField(null)}
+            editable={!loading}
+            secureTextEntry
+            className="border p-4 rounded-xl border-gray-300 bg-white"
+          />
+
+          <PasswordValidationTooltip 
+            visible={focusedField === "password"}
+            passwordFilled={passwordFilled}
+            passwordLongEnough={passwordLongEnough}
+            passwordHasUppercase={passwordHasUppercase}
+            passwordHasLowercase={passwordHasLowercase}
+            passwordHasNumber={passwordHasNumber}
+            passwordHasSpecial={passwordHasSpecial}
+            passwordNoSpaces={passwordNoSpaces}
+          />
+        </View>
       </View>
 
-      {/* ── Forgot Password link ── */}
+      {/* Forgot Password link */}
       <Pressable
         onPress={() => router.push("./forgotPassword")}
         disabled={loading}
-        className="mb-6 self-end"
+        className="mb-6 mt-4 self-end"
       >
         <Text className="text-yellow-600 text-sm font-medium">
           Forgot password?

@@ -34,6 +34,11 @@ import {
 import { db } from '../../src/Firebase/firebaseConfig';
 import { supabase } from '../../src/Supabase/supabaseConfig';
 import { firestore } from '../../src/Firebase/firebaseConfig';
+import {
+  notifyAdminMemberSubmitted,
+  notifyAdminMemberCommented,
+  notifyMemberWorkReviewed,
+} from '../../src/utils/notificationHelper';
 
 type Task = {
   id: string;
@@ -909,6 +914,18 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       };
       setComments(prev => [newCommentObj, ...prev]);
       
+      // Notify admin that member commented on task
+      if (task.createdBy && task.createdBy !== currentUser?.uid) {
+        await notifyAdminMemberCommented(
+          task.createdBy,
+          userName,
+          task.title,
+          task.id,
+          task.groupId || '',
+          currentUser?.uid || ''
+        );
+      }
+      
       setNewComment('');
       setCommentFiles([]);
       
@@ -989,6 +1006,19 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       };
       setSubmissions(prev => [newSubmissionObj, ...prev]);
       
+      // Notify admin that member submitted work
+      if (task.createdBy) {
+        await notifyAdminMemberSubmitted(
+          task.createdBy,
+          userName,
+          currentUser?.email || '',
+          task.id,
+          task.title,
+          task.groupId || '',
+          currentUser?.uid || ''
+        );
+      }
+      
       setSubmissionLink('');
       setSubmissionNote('');
       setSubmissionStatus('Progress');
@@ -1027,6 +1057,19 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       // Update submission with admin review
       await updateDoc(doc(firestore, 'submissions', selectedSubmissionForReview.id), reviewData);
 
+      // Notify member that their work was reviewed
+      const adminName = currentUser?.displayName || 'Admin';
+      await notifyMemberWorkReviewed(
+        selectedSubmissionForReview.userId,
+        reviewStatus,
+        task.title,
+        task.id,
+        task.groupId || '',
+        adminName,
+        currentUser?.uid || '',
+        reviewNote
+      );
+
       // If admin approves, add the submitting user to the completedBy array
       if (reviewStatus === 'Approved') {
         const completedBy = task.completedBy || [];
@@ -1036,13 +1079,23 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
         if (!completedBy.includes(submittingUserId)) {
           completedBy.push(submittingUserId);
           
-          // Update task with the new completedBy array
-          await updateDoc(doc(db, 'tasks', task.id), {
+          // Check if all assigned members have now completed the task
+          const assignedMembers = task.assignedTo || [];
+          const allMembersCompleted = assignedMembers.length > 0 && completedBy.length === assignedMembers.length;
+          
+          // Update task with the new completedBy array, and mark as completed if all members are done
+          const updateData: any = {
             completedBy: completedBy,
-          });
+          };
+          
+          if (allMembersCompleted) {
+            updateData.completed = true;
+          }
+          
+          await updateDoc(doc(db, 'tasks', task.id), updateData);
           
           // Update the task locally
-          setTask({ ...task, completedBy });
+          setTask({ ...task, completedBy, ...(allMembersCompleted && { completed: true }) });
         }
         
         // Update the submission object locally
@@ -1069,10 +1122,24 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       setReviewStatus('Approved');
       setReviewNote('');
 
-      Alert.alert(
-        'Success',
-        `Submission has been marked as "${reviewStatus}"${reviewNote ? ' with a note' : ''}${reviewStatus === 'Approved' ? ' - Member task marked as complete' : ''}`
-      );
+      // After approval, check if all members have completed
+      if (reviewStatus === 'Approved') {
+        const completedBy = task.completedBy || [];
+        const submittingUserId = selectedSubmissionForReview.userId;
+        const newCompletedCount = completedBy.includes(submittingUserId) ? completedBy.length : completedBy.length + 1;
+        const assignedCount = task.assignedTo?.length || 0;
+        const isTaskFullyCompleted = newCompletedCount === assignedCount;
+
+        Alert.alert(
+          'Success',
+          `Submission has been marked as "${reviewStatus}"${reviewNote ? ' with a note' : ''}${isTaskFullyCompleted ? ' - All assigned members completed, task marked as complete' : reviewStatus === 'Approved' ? ' - Member task marked as complete' : ''}`
+        );
+      } else {
+        Alert.alert(
+          'Success',
+          `Submission has been marked as "${reviewStatus}"${reviewNote ? ' with a note' : ''}`
+        );
+      }
     } catch (error) {
       console.error('Error reviewing submission:', error);
       Alert.alert('Error', 'Failed to review submission. Please try again.');
@@ -1206,12 +1273,18 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
             {/* Title and Status */}
             <View className="mb-4">
               <View className="flex-row items-center justify-between mb-4">
-                <Text className={`text-2xl font-bold flex-1 ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
-                  {task.title}
-                </Text>
-                {task.completed && (
+                <View className="flex-row items-center flex-1">
+                  {(task.completed || (task.completedBy && task.completedBy.length > 0)) && (
+                    <View className="mr-3">
+                      <Ionicons name="checkmark-circle" size={24} color="#22C55E" />
+                    </View>
+                  )}
+                  <Text className={`text-2xl font-bold flex-1 ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                    {task.title}
+                  </Text>
+                </View>
+                {(task.completed || (task.completedBy && task.completedBy.length > 0)) && (
                   <View className="bg-green-100 px-3 py-1 rounded-full ml-2 flex-row items-center gap-1">
-                    <Ionicons name="checkmark-circle" size={16} color="#22C55E" />
                     <Text className="text-green-700 font-semibold text-xs">Completed</Text>
                   </View>
                 )}
@@ -1284,28 +1357,41 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 <View className="gap-2">
                   {members
                     .filter(member => task.assignedTo.includes(member.uid))
-                    .map((member) => (
-                      <View key={member.uid} className="flex-row items-center gap-3 bg-yellow-50 rounded-lg p-3">
-                        {member.profileImage ? (
-                          <Image
-                            source={{ uri: member.profileImage }}
-                            className="w-8 h-8 rounded-full"
-                          />
-                        ) : (
-                          <View className="w-8 h-8 bg-yellow-200 rounded-full items-center justify-center">
-                            <Text className="text-yellow-700 font-bold text-xs">
-                              {member.name.charAt(0).toUpperCase()}
+                    .map((member) => {
+                      const isCompleted = task.completedBy?.includes(member.uid) || false;
+                      return (
+                        <View key={member.uid} className={`flex-row items-center gap-3 rounded-lg p-3 ${isCompleted ? 'bg-green-50' : 'bg-yellow-50'}`}>
+                          {member.profileImage ? (
+                            <Image
+                              source={{ uri: member.profileImage }}
+                              className="w-8 h-8 rounded-full"
+                            />
+                          ) : (
+                            <View className={`w-8 h-8 rounded-full items-center justify-center ${isCompleted ? 'bg-green-200' : 'bg-yellow-200'}`}>
+                              <Text className={`font-bold text-xs ${isCompleted ? 'text-green-700' : 'text-yellow-700'}`}>
+                                {member.name.charAt(0).toUpperCase()}
+                              </Text>
+                            </View>
+                          )}
+                          <View className="flex-1">
+                            <Text className="font-semibold text-gray-800">{member.name}</Text>
+                            {member.email && (
+                              <Text className="text-xs text-gray-500">{member.email}</Text>
+                            )}
+                          </View>
+                          <View className={`px-3 py-1 rounded-full flex-row items-center gap-1 ${isCompleted ? 'bg-green-100' : 'bg-yellow-100'}`}>
+                            <Ionicons 
+                              name={isCompleted ? "checkmark-circle" : "ellipse-outline"} 
+                              size={14} 
+                              color={isCompleted ? "#22C55E" : "#F59E0B"} 
+                            />
+                            <Text className={`text-xs font-semibold ${isCompleted ? 'text-green-700' : 'text-yellow-700'}`}>
+                              {isCompleted ? 'Completed' : 'Pending'}
                             </Text>
                           </View>
-                        )}
-                        <View className="flex-1">
-                          <Text className="font-semibold text-gray-800">{member.name}</Text>
-                          {member.email && (
-                            <Text className="text-xs text-gray-500">{member.email}</Text>
-                          )}
                         </View>
-                      </View>
-                    ))}
+                      );
+                    })}
                 </View>
               </View>
             )}
@@ -1431,9 +1517,20 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                               <Text className="text-white text-xs font-semibold ml-1">Review</Text>
                             </TouchableOpacity>
                           )}
-                          <View className={`px-3 py-1.5 rounded-full ${submission.status === 'Complete' ? 'bg-green-100' : 'bg-blue-100'}`}>
-                            <Text className={`text-xs font-bold ${submission.status === 'Complete' ? 'text-green-700' : 'text-blue-700'}`}>
-                              {submission.status}
+                          <View className={`px-3 py-1.5 rounded-full ${
+                            submission.adminReview 
+                              ? (submission.adminReview.status === 'Approved' ? 'bg-green-100' : 'bg-orange-100')
+                              : (submission.status === 'Complete' ? 'bg-green-100' : 'bg-blue-100')
+                          }`}>
+                            <Text className={`text-xs font-bold ${
+                              submission.adminReview 
+                                ? (submission.adminReview.status === 'Approved' ? 'text-green-700' : 'text-orange-700')
+                                : (submission.status === 'Complete' ? 'text-green-700' : 'text-blue-700')
+                            }`}>
+                              {submission.adminReview 
+                                ? (submission.adminReview.status === 'Approved' ? 'Approved' : 'Need Revision')
+                                : submission.status
+                              }
                             </Text>
                           </View>
                         </View>

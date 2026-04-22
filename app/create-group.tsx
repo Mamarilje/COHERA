@@ -21,6 +21,7 @@ import {
   getDocs,
 } from 'firebase/firestore';
 import { db } from '../src/Firebase/firebaseConfig';
+import { notifyAdminJoinRequest } from '../src/utils/notificationHelper';
 
 type Category = {
   id: string;
@@ -239,6 +240,17 @@ export default function CreateGroup() {
         timestamp: serverTimestamp(),
         status: 'pending',
       });
+
+      // Notify the group admin about the join request
+      await notifyAdminJoinRequest(
+        groupData.createdBy,
+        user.displayName || user.email?.split('@')[0] || 'User',
+        user.email || '',
+        groupData.name,
+        groupDoc.id,
+        '', // joinRequestId would be the docRef.id, but we can pass empty for now
+        user.uid
+      );
 
       setShowJoinModal(false);
       setJoinCode('');

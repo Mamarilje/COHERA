@@ -1,6 +1,6 @@
 import { View, Text, ScrollView, TouchableOpacity, Modal, FlatList, ActivityIndicator } from "react-native";
-import { useState, useEffect } from "react";
-import { useRouter } from "expo-router";
+import { useState, useEffect, useCallback } from "react";
+import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { getAuth } from 'firebase/auth';
 import { collection, query, where, getDocs } from 'firebase/firestore';
@@ -73,13 +73,47 @@ export default function CalendarScreen() {
   const [selectedGroupId, setSelectedGroupId] = useState<string>('all');
   const [showGroupPicker, setShowGroupPicker] = useState(false);
   
-  // Get real current date on component mount
-  useEffect(() => {
+  // Notification state
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
+
+  const fetchUnreadNotifications = async () => {
+    const currentUser = getAuth().currentUser;
+    if (!currentUser) return;
+
+    try {
+      const notificationsQuery = query(
+        collection(db, 'notifications'),
+        where('userId', '==', currentUser.uid),
+        where('read', '==', false)
+      );
+
+      const snapshot = await getDocs(notificationsQuery);
+      setUnreadNotificationsCount(snapshot.size);
+    } catch (error) {
+      console.error('Error fetching unread notifications:', error);
+    }
+  };
+
+  const loadAllData = async () => {
     const today = new Date();
     setCurrentDate(today);
-    setSelectedDate(today.getDate()); // Auto-select today's date
-    fetchUserTasks();
+    setSelectedDate(today.getDate());
+    await Promise.all([
+      fetchUserTasks(),
+      fetchUnreadNotifications(),
+    ]);
+  };
+
+  // Get real current date on component mount
+  useEffect(() => {
+    loadAllData();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadAllData();
+    }, [])
+  );
 
   // Fetch user's groups and their tasks
   const fetchUserTasks = async () => {
@@ -423,9 +457,24 @@ export default function CalendarScreen() {
       {/* Header */}
       <View className="px-4 pt-12 pb-2 flex-row justify-between items-center">
         <Text className="text-3xl font-bold">Calendar</Text>
-        <TouchableOpacity onPress={fetchUserTasks} className="p-2">
-          <Ionicons name="refresh-outline" size={24} color="#3B82F6" />
-        </TouchableOpacity>
+        <View className="flex-row items-center gap-3">
+          <TouchableOpacity onPress={fetchUserTasks} className="p-2">
+            <Ionicons name="refresh-outline" size={24} color="#3B82F6" />
+          </TouchableOpacity>
+          <TouchableOpacity 
+            onPress={() => router.push('/notifications' as any)}
+            className="relative p-2"
+          >
+            <Ionicons name="notifications-outline" size={24} color="#666" />
+            {unreadNotificationsCount > 0 && (
+              <View className="absolute -top-1 -right-1 bg-red-500 rounded-full w-5 h-5 items-center justify-center">
+                <Text className="text-white text-xs font-bold">
+                  {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
