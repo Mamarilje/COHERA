@@ -11,6 +11,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons"; // Make sure to install expo/vector-icons
 
 type CheckItemProps = {
   met: boolean;
@@ -119,6 +120,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [focusedField, setFocusedField] = useState<"email" | "password" | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   // ✅ Email checks
   const emailFilled = email.trim().length > 0;
@@ -219,16 +221,30 @@ export default function Login() {
       {/* Password wrapper with proper z-index handling */}
       <View style={{ zIndex: focusedField === "password" ? 100 : 1, marginTop: 24 }}>
         <View className="relative">
-          <TextInput
-            placeholder="Password"
-            value={password}
-            onChangeText={setPassword}
-            onFocus={() => setFocusedField("password")}
-            onBlur={() => setFocusedField(null)}
-            editable={!loading}
-            secureTextEntry
-            className="border p-4 rounded-xl border-gray-300 bg-white"
-          />
+          <View className="relative">
+            <TextInput
+              placeholder="Password"
+              value={password}
+              onChangeText={setPassword}
+              onFocus={() => setFocusedField("password")}
+              onBlur={() => setFocusedField(null)}
+              editable={!loading}
+              secureTextEntry={!showPassword}
+              className="border p-4 rounded-xl border-gray-300 bg-white pr-12"
+            />
+            
+            <Pressable
+              onPress={() => setShowPassword(!showPassword)}
+              className="absolute right-3 top-1/2 -translate-y-1/2"
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons 
+                name={showPassword ? "eye-off" : "eye"} 
+                size={24} 
+                color="#9CA3AF" 
+              />
+            </Pressable>
+          </View>
 
           <PasswordValidationTooltip 
             visible={focusedField === "password"}

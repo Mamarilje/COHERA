@@ -541,32 +541,7 @@ export default function Profile() {
               <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
             </TouchableOpacity>
 
-            {/* Privacy & Security */}
-            <TouchableOpacity className="flex-row items-center justify-between p-4 border-b border-gray-100">
-              <View className="flex-row items-center">
-                <Ionicons name="lock-closed-outline" size={22} color="#4B7BEC" />
-                <Text className="text-gray-700 ml-3">Privacy & Security</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
-            </TouchableOpacity>
-
-            {/* Email Settings */}
-            <TouchableOpacity 
-              className="flex-row items-center justify-between p-4 border-b border-gray-100"
-              onPress={() => {
-                setTempEmail(userEmail);
-                setIsEmailChanging(true);
-                setIsReauthenticating(true);
-                setShowEditModal(true);
-              }}
-            >
-              <View className="flex-row items-center">
-                <Ionicons name="mail-outline" size={22} color="#4B7BEC" />
-                <Text className="text-gray-700 ml-3">Email Settings</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
-            </TouchableOpacity>
-
+           
             {/* Delete Account */}
             <TouchableOpacity className="flex-row items-center justify-between p-4">
               <View className="flex-row items-center">
@@ -582,7 +557,7 @@ export default function Profile() {
         <View className="px-5 mt-2 mb-8">
           <View className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 items-center">
             <Text className="text-gray-500 text-sm">Version 1.0.0</Text>
-            <Text className="text-gray-400 text-xs mt-1">© 2024 TaskFlow</Text>
+            <Text className="text-gray-400 text-xs mt-1">© 2026 Cohera</Text>
           </View>
         </View>
       </ScrollView>

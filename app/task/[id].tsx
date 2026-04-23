@@ -17,8 +17,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { getAuth } from 'firebase/auth';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
+import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+import * as MediaLibrary from 'expo-media-library';
 import {
   doc,
   getDoc,
@@ -48,7 +49,7 @@ type Task = {
   deadline: string;
   assignedTo: string[];
   completed: boolean;
-  completedBy?: string[]; // Track which assigned members completed it
+  completedBy?: string[];
   createdBy: string;
   createdAt: any;
   fileUrls?: string[];
@@ -157,7 +158,17 @@ export default function TaskDetail() {
 
   useEffect(() => {
     fetchTaskDetails();
+    requestMediaPermissions();
   }, [id]);
+
+  const requestMediaPermissions = async () => {
+    if (Platform.OS === 'android' || Platform.OS === 'ios') {
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        console.log('Media library permission not granted');
+      }
+    }
+  };
 
   const fetchTaskDetails = async () => {
     if (!id) return;
@@ -184,12 +195,10 @@ export default function TaskDetail() {
         console.error('Error fetching creator:', error);
       }
       
-      // Store creator name separately, keep createdBy as UID for admin checks
       (taskData as any).creatorName = creatorName;
       
       setTask(taskData);
 
-      // Debug file URLs
       if (taskData.fileUrls && taskData.fileUrls.length > 0) {
         console.log('=== TASK FILE URLS ===');
         taskData.fileUrls.forEach((url, index) => {
@@ -269,7 +278,6 @@ export default function TaskDetail() {
 
       fetchComments();
       
-      // Fetch submissions
       const fetchSubmissions = async () => {
         try {
           const submissionsQuery = query(
@@ -305,7 +313,6 @@ export default function TaskDetail() {
 
       fetchSubmissions();
       
-      // Check if current user has task overload
       if (taskData && taskData.assignedTo && taskData.assignedTo.includes(currentUser?.uid || '')) {
         checkTaskOverload(taskData);
       }
@@ -344,7 +351,6 @@ export default function TaskDetail() {
   const toggleTaskComplete = async () => {
     if (!task) return;
     
-    // Only admin can mark tasks as complete
     if (currentUser?.uid !== task.createdBy) {
       Alert.alert('Error', 'Only the task creator can mark it as complete');
       return;
@@ -353,12 +359,11 @@ export default function TaskDetail() {
     try {
       setIsMarkingComplete(true);
       
-      // Add current user to completedBy array
       const completedBy = task.completedBy || [];
       
       await updateDoc(doc(db, 'tasks', task.id), {
         completedBy: completedBy,
-        completed: true, // Mark global task as complete when admin manually completes it
+        completed: true,
       });
       
       setTask({ ...task, completed: true, completedBy });
@@ -446,7 +451,6 @@ export default function TaskDetail() {
     }
   };
 
-  // Helper function to get MIME type
   const getMimeType = (fileName: string): string => {
     const extension = fileName.split('.').pop()?.toLowerCase() || '';
     const mimeTypes: { [key: string]: string } = {
@@ -469,304 +473,239 @@ export default function TaskDetail() {
     return mimeTypes[extension] || 'application/octet-stream';
   };
 
-  // Helper function to check if file is an image
   const isImageFile = (fileName: string): boolean => {
     const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'];
     const extension = fileName.split('.').pop()?.toLowerCase() || '';
     return imageExtensions.includes(extension);
   };
 
-  // Optional: Save image to gallery (requires expo-media-library)
-  const saveToGallery = async (filePath: string) => {
+  // Validate file size before download
+  const validateFileSize = async (fileUrl: string, maxSizeMB: number = 200): Promise<boolean> => {
     try {
-      const MediaLibrary = require('expo-media-library');
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      if (status === 'granted') {
-        const asset = await MediaLibrary.createAssetAsync(filePath);
-        await MediaLibrary.createAlbumAsync('Download', asset, false);
-        Alert.alert('Success', 'Image saved to gallery');
+      const response = await fetch(fileUrl, { method: 'HEAD' });
+      const contentLength = response.headers.get('content-length');
+      
+      if (contentLength) {
+        const fileSizeMB = parseInt(contentLength) / (1024 * 1024);
+        if (fileSizeMB > maxSizeMB) {
+          Alert.alert(
+            'File Too Large',
+            `File size is ${fileSizeMB.toFixed(2)}MB. Maximum allowed is ${maxSizeMB}MB.`,
+            [{ text: 'OK' }]
+          );
+          return false;
+        }
       }
+      return true;
     } catch (error) {
-      console.error('Error saving to gallery:', error);
+      console.log('Could not validate file size (continuing anyway):', error);
+      return true;
     }
   };
 
-
-// Helper function to download with retry logic
-const downloadWithRetry = async (url: string, filePath: string, maxRetries: number = 3): Promise<any> => {
-  let lastError: any;
-  
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      console.log(`Download attempt ${attempt + 1}/${maxRetries} for: ${filePath}`);
-      const result = await FileSystem.downloadAsync(url, filePath);
-      return result;
-    } catch (error) {
-      lastError = error;
-      console.error(`Download attempt ${attempt + 1} failed:`, error);
-      
-      if (attempt < maxRetries - 1) {
-        // Exponential backoff: 1s, 2s, 4s
-        const delayMs = Math.pow(2, attempt) * 1000;
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
-    }
-  }
-  
-  throw lastError;
-};
-
-// Helper function to validate file size before download
-const validateFileSize = async (fileUrl: string, maxSizeMB: number = 200): Promise<boolean> => {
-  try {
-    const response = await fetch(fileUrl, { method: 'HEAD' });
-    const contentLength = response.headers.get('content-length');
+  // Request storage permission for Android
+  const requestStoragePermission = async (): Promise<boolean> => {
+    if (Platform.OS === 'web') return true;
     
-    if (contentLength) {
-      const fileSizeMB = parseInt(contentLength) / (1024 * 1024);
-      if (fileSizeMB > maxSizeMB) {
-        Alert.alert(
-          'File Too Large',
-          `File size is ${fileSizeMB.toFixed(2)}MB. Maximum allowed is ${maxSizeMB}MB.`,
-          [{ text: 'OK' }]
-        );
-        return false;
-      }
-    }
-    return true;
-  } catch (error) {
-    console.log('Could not validate file size (continuing anyway):', error);
-    return true; // Continue if validation fails
-  }
-};
-
-const downloadFile = async (fileUrl: string, fileName: string) => {
-  if (!fileUrl) {
-    Alert.alert('Error', 'No file URL provided');
-    return;
-  }
-
-  setDownloadingFile(fileName);
-
-  try {
-    console.log('Starting download for:', fileName);
-    console.log('File URL:', fileUrl);
-
-    // Web handling
-    if (Platform.OS === 'web') {
-      window.open(fileUrl, '_blank');
-      setDownloadingFile(null);
-      return;
-    }
-
-    // Validate file size first
-    const isValidSize = await validateFileSize(fileUrl, 200);
-    if (!isValidSize) {
-      setDownloadingFile(null);
-      return;
-    }
-
-    const isSharingAvailable = await Sharing.isAvailableAsync();
-
-    if (!isSharingAvailable) {
-      const canOpen = await Linking.canOpenURL(fileUrl);
-      if (canOpen) {
-        await Linking.openURL(fileUrl);
-      } else {
-        Alert.alert('Error', 'Cannot open this file type');
-      }
-      setDownloadingFile(null);
-      return;
-    }
-
-    // Get directories with proper fallback for Expo Go
-    let downloadDir = '';
-    let useBasePath = false;
-
-    // Try to access Downloads folder first (for physical devices)
-    if (Platform.OS === 'android') {
-      try {
-        // Try common Android Downloads path
-        const downloadsPath = '/storage/emulated/0/Download/';
-        console.log('Trying Android Downloads path:', downloadsPath);
-        downloadDir = downloadsPath;
-      } catch (e) {
-        console.log('Android Downloads path error:', e);
-      }
-    }
-
-    // Fallback to document directory
-    if (!downloadDir) {
-      try {
-        const docDir = FileSystem.documentDirectory;
-        console.log('documentDirectory:', docDir);
-        if (docDir && docDir.trim() !== '') {
-          downloadDir = docDir;
-        }
-      } catch (e) {
-        console.log('documentDirectory error:', e);
-      }
-    }
-
-    // Fallback to cache directory
-    if (!downloadDir) {
-      try {
-        const cacheDir = FileSystem.cacheDirectory;
-        console.log('cacheDirectory:', cacheDir);
-        if (cacheDir && cacheDir.trim() !== '') {
-          downloadDir = cacheDir;
-        }
-      } catch (e) {
-        console.log('cacheDirectory error:', e);
-      }
-    }
-
-    // Fallback to temporary directory
-    if (!downloadDir) {
-      try {
-        const tempDir = (FileSystem as any).temporaryDirectory;
-        console.log('temporaryDirectory:', tempDir);
-        if (tempDir && tempDir.trim() !== '') {
-          downloadDir = tempDir;
-        }
-      } catch (e) {
-        console.log('temporaryDirectory error:', e);
-      }
-    }
-
-    // Try to use raw temp path as last resort
-    if (!downloadDir) {
-      console.log('Trying raw temp path approach');
-      downloadDir = '/tmp/';
-      useBasePath = true;
-    }
-
-    console.log('Final downloadDir:', downloadDir, 'useBasePath:', useBasePath);
-
-    const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const uniqueFileName = `${Date.now()}_${safeFileName}`;
-    
-    // Create file path
-    let filePath = '';
-    if (useBasePath) {
-      filePath = uniqueFileName; // Simple filename for /tmp
-    } else {
-      filePath = downloadDir + uniqueFileName;
-    }
-
-    console.log('File will be saved to:', filePath);
-    console.log('Safe file name:', safeFileName);
-
     try {
-      // Try to download the file
-      const downloadResult = await downloadWithRetry(fileUrl, filePath, 3);
-
-      if (downloadResult.status === 200) {
-        console.log('Download completed successfully');
-        console.log('File saved at:', filePath);
-
-        // If we used base path, we need to get the full path for sharing
-        let fullFilePath = filePath;
-        if (useBasePath && downloadDir) {
-          fullFilePath = downloadDir + filePath;
-        }
-
-        // Check if saved to Downloads folder
-        const isInDownloads = downloadDir && downloadDir.includes('Download');
-
-        // For Android, use share to allow saving
-        if (Platform.OS === 'android') {
-          try {
-            // If already in Downloads folder, just show success
-            if (isInDownloads) {
-              Alert.alert(
-                '✅ Download Complete',
-                `${fileName}\n\nFile saved to your Downloads folder.`,
-                [
-                  { text: 'OK', style: 'default' },
-                  {
-                    text: 'Open in Files',
-                    onPress: () => {
-                      // Try to open file manager
-                      Linking.openURL('content://com.android.externalstorage.documents/root/Download');
-                    },
-                  },
-                ]
-              );
-            } else {
-              // Show share dialog to save to Downloads
-              await Sharing.shareAsync(fullFilePath, {
-                mimeType: getMimeType(fileName),
-                dialogTitle: `Save ${fileName} to Downloads`,
-              });
-              
-              Alert.alert(
-                'Download Successful',
-                `${fileName} is ready to save.\n\nTap "Save" to add it to your Downloads folder.`,
-                [{ text: 'OK' }]
-              );
-            }
-          } catch (shareError) {
-            console.error('Share error:', shareError);
-            Alert.alert(
-              'Download Successful',
-              `${fileName} has been downloaded and saved to your device.`,
-              [{ text: 'OK' }]
-            );
-          }
-        } else {
-          // iOS
+      if (Platform.OS === 'android' || Platform.OS === 'ios') {
+        const { status } = await MediaLibrary.requestPermissionsAsync();
+        if (status !== 'granted') {
           Alert.alert(
-            'Download Complete',
-            `${fileName} downloaded successfully.\n\nTap "Open" to view the file.`,
+            'Permission Required',
+            'This app needs storage permission to download files. Please grant permission in settings.',
             [
-              { text: 'Close', style: 'cancel' },
-              {
-                text: 'Open',
-                onPress: async () => {
-                  try {
-                    await Sharing.shareAsync(fullFilePath, {
-                      mimeType: getMimeType(fileName),
-                      dialogTitle: `Open ${fileName}`,
-                    });
-                  } catch (error) {
-                    console.error('Error opening file:', error);
-                    Alert.alert('Error', 'Could not open the file');
-                  }
-                },
-              },
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings() }
             ]
           );
+          return false;
         }
-      } else {
-        throw new Error(`Download failed with status: ${downloadResult.status}`);
       }
-    } catch (downloadError) {
-      console.error('Download error:', downloadError);
-      throw downloadError; // Re-throw to be caught by outer catch
+      return true;
+    } catch (error) {
+      console.error('Permission error:', error);
+      // Continue anyway - the download might still work without explicit permission
+      return true;
     }
-  } catch (error: any) {
-    console.error('Download error details:', error);
-    console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
+  };
 
-    // Suggest browser fallback since directories weren't available
-    Alert.alert(
-      'Download Not Available',
-      'Your device does not support local file saving. You can open the file in your browser instead, where you can save it normally.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Open in Browser',
-          onPress: () => Linking.openURL(fileUrl),
-        },
-      ]
-    );
-  } finally {
-    setDownloadingFile(null);
-  }
-};
-  
+  // Download with retry logic
+  const downloadWithRetry = async (url: string, filePath: string, maxRetries: number = 3): Promise<any> => {
+    let lastError: any;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        console.log(`Download attempt ${attempt + 1}/${maxRetries} for: ${filePath}`);
+        const result = await FileSystem.downloadAsync(url, filePath);
+        return result;
+      } catch (error) {
+        lastError = error;
+        console.error(`Download attempt ${attempt + 1} failed:`, error);
+        
+        if (attempt < maxRetries - 1) {
+          const delayMs = Math.pow(2, attempt) * 1000;
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
+    }
+    
+    throw lastError;
+  };
+
+  // Save image to gallery
+  const saveToGallery = async (filePath: string) => {
+    try {
+      const asset = await MediaLibrary.createAssetAsync(filePath);
+      const albums = await MediaLibrary.getAlbumsAsync();
+      let downloadAlbum = albums.find(album => album.title === 'Download');
+      
+      if (!downloadAlbum) {
+        await MediaLibrary.createAlbumAsync('Download', asset, false);
+      } else {
+        await MediaLibrary.addAssetsToAlbumAsync([asset], downloadAlbum, false);
+      }
+      return true;
+    } catch (error) {
+      console.error('Error saving to gallery:', error);
+      return false;
+    }
+  };
+
+  // Main download function
+  const downloadFile = async (fileUrl: string, fileName: string) => {
+    if (!fileUrl) {
+      Alert.alert('Error', 'No file URL provided');
+      return;
+    }
+
+    setDownloadingFile(fileName);
+
+    try {
+      console.log('Starting download for:', fileName);
+      console.log('File URL:', fileUrl);
+
+      // Web handling
+      if (Platform.OS === 'web') {
+        window.open(fileUrl, '_blank');
+        setDownloadingFile(null);
+        return;
+      }
+
+      // Validate file size
+      const isValidSize = await validateFileSize(fileUrl, 200);
+      if (!isValidSize) {
+        setDownloadingFile(null);
+        return;
+      }
+
+      // Request permission
+      const hasPermission = await requestStoragePermission();
+      if (!hasPermission) {
+        setDownloadingFile(null);
+        return;
+      }
+
+      // Create unique filename
+      const timestamp = Date.now();
+      const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const uniqueFileName = `${timestamp}_${safeFileName}`;
+      
+      if (Platform.OS === 'android') {
+        // For Android: Download directly to Downloads folder via MediaLibrary
+        // This makes files visible in the file manager
+        try {
+          console.log('Downloading to Downloads folder...');
+          
+          // Download to cache first as temporary storage
+          const cacheDir = (FileSystem as any).cacheDirectory || '';
+          const tempFilePath = cacheDir + uniqueFileName;
+          
+          // Download file with retry
+          const downloadResult = await downloadWithRetry(fileUrl, tempFilePath, 3);
+          
+          if (downloadResult.status === 200) {
+            console.log('Download completed, saving to Downloads...');
+            
+            // Create asset in MediaLibrary (this makes it visible in file manager)
+            const asset = await MediaLibrary.createAssetAsync(tempFilePath);
+            console.log('Asset created:', asset.uri);
+            
+            // Get or create Downloads album
+            const albums = await MediaLibrary.getAlbumsAsync();
+            let downloadsAlbum = albums.find(album => album.title === 'Downloads');
+            
+            if (!downloadsAlbum) {
+              console.log('Creating Downloads folder...');
+              await MediaLibrary.createAlbumAsync('Downloads', asset, false);
+            } else {
+              console.log('Adding to existing Downloads folder...');
+              await MediaLibrary.addAssetsToAlbumAsync([asset], downloadsAlbum, false);
+            }
+            
+            // Show success message
+            Alert.alert(
+              '✅ Download Complete',
+              `${fileName}\n\nFile saved to Downloads folder. You can find it in your file manager.`,
+              [{ text: 'OK', style: 'default' }]
+            );
+            
+            // Clean up temp file
+            await FileSystem.deleteAsync(tempFilePath, { idempotent: true });
+          } else {
+            throw new Error(`Download failed with status: ${downloadResult.status}`);
+          }
+        } catch (error) {
+          console.error('Android download error:', error);
+          throw error;
+        }
+      } else if (Platform.OS === 'ios') {
+        // For iOS: Save to Documents and use share sheet
+        const documentsDir = (FileSystem as any).documentDirectory || '';
+        const fileUri = documentsDir + uniqueFileName;
+        
+        console.log('Downloading to iOS documents...');
+        const downloadResult = await downloadWithRetry(fileUrl, fileUri, 3);
+        
+        if (downloadResult.status === 200) {
+          console.log('Download completed');
+          
+          // Save to files app using Sharing
+          if (await Sharing.isAvailableAsync()) {
+            await Sharing.shareAsync(fileUri, {
+              mimeType: getMimeType(fileName),
+              dialogTitle: `Save ${fileName} to Files`,
+            });
+          }
+          
+          Alert.alert(
+            '✅ Download Complete',
+            `${fileName} has been saved. Check your Files app or tap "Save to Files" when prompted.`,
+            [{ text: 'OK' }]
+          );
+        } else {
+          throw new Error(`Download failed with status: ${downloadResult.status}`);
+        }
+      }
+      
+    } catch (error: any) {
+      console.error('Download error details:', error);
+      
+      Alert.alert(
+        'Download Failed',
+        `Could not download ${fileName}. ${error.message || 'Please try again.'}`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Open in Browser',
+            onPress: () => Linking.openURL(fileUrl),
+          },
+        ]
+      );
+    } finally {
+      setDownloadingFile(null);
+    }
+  };
 
   const uploadFiles = async (files: { name: string; uri: string }[]): Promise<string[]> => {
     const uploadedUrls: string[] = [];
@@ -881,7 +820,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
         uploadedNames = commentFiles.map(f => f.name);
       }
 
-      // Fetch the actual user name from the database
       let userName = currentUser?.displayName || 'Anonymous';
       try {
         if (currentUser?.uid) {
@@ -892,7 +830,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
         }
       } catch (error) {
         console.error('Error fetching user name:', error);
-        // Fall back to displayName if fetch fails
       }
       
       const commentData = {
@@ -914,7 +851,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       };
       setComments(prev => [newCommentObj, ...prev]);
       
-      // Notify admin that member commented on task
       if (task.createdBy && task.createdBy !== currentUser?.uid) {
         await notifyAdminMemberCommented(
           task.createdBy,
@@ -960,7 +896,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
         uploadedPhotoUrls = await uploadFiles(submissionPhotos);
       }
 
-      // Fetch the actual user name from the database
       let userName = currentUser?.displayName || 'Anonymous';
       try {
         if (currentUser?.uid) {
@@ -971,7 +906,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
         }
       } catch (error) {
         console.error('Error fetching user name:', error);
-        // Fall back to displayName if fetch fails
       }
       
       const submissionData: any = {
@@ -985,7 +919,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
         taskCreatedBy: task.createdBy || '',
       };
 
-      // Only add optional fields if they have values
       if (submissionLink.trim()) {
         submissionData.link = submissionLink;
       }
@@ -1006,7 +939,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       };
       setSubmissions(prev => [newSubmissionObj, ...prev]);
       
-      // Notify admin that member submitted work
       if (task.createdBy) {
         await notifyAdminMemberSubmitted(
           task.createdBy,
@@ -1054,10 +986,8 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
         },
       };
 
-      // Update submission with admin review
       await updateDoc(doc(firestore, 'submissions', selectedSubmissionForReview.id), reviewData);
 
-      // Notify member that their work was reviewed
       const adminName = currentUser?.displayName || 'Admin';
       await notifyMemberWorkReviewed(
         selectedSubmissionForReview.userId,
@@ -1070,20 +1000,16 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
         reviewNote
       );
 
-      // If admin approves, add the submitting user to the completedBy array
       if (reviewStatus === 'Approved') {
         const completedBy = task.completedBy || [];
         const submittingUserId = selectedSubmissionForReview.userId;
         
-        // Add user to completedBy if not already there
         if (!completedBy.includes(submittingUserId)) {
           completedBy.push(submittingUserId);
           
-          // Check if all assigned members have now completed the task
           const assignedMembers = task.assignedTo || [];
           const allMembersCompleted = assignedMembers.length > 0 && completedBy.length === assignedMembers.length;
           
-          // Update task with the new completedBy array, and mark as completed if all members are done
           const updateData: any = {
             completedBy: completedBy,
           };
@@ -1094,11 +1020,9 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
           
           await updateDoc(doc(db, 'tasks', task.id), updateData);
           
-          // Update the task locally
           setTask({ ...task, completedBy, ...(allMembersCompleted && { completed: true }) });
         }
         
-        // Update the submission object locally
         setSubmissions(prev =>
           prev.map(sub =>
             sub.id === selectedSubmissionForReview.id
@@ -1107,7 +1031,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
           )
         );
       } else {
-        // For revisions needed, just update the submission
         setSubmissions(prev =>
           prev.map(sub =>
             sub.id === selectedSubmissionForReview.id
@@ -1122,7 +1045,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       setReviewStatus('Approved');
       setReviewNote('');
 
-      // After approval, check if all members have completed
       if (reviewStatus === 'Approved') {
         const completedBy = task.completedBy || [];
         const submittingUserId = selectedSubmissionForReview.userId;
@@ -1201,7 +1123,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
     );
   };
 
-  // Get file icon based on extension
   const getFileIcon = (fileName: string, isDownloading: boolean) => {
     if (isDownloading) return null;
     const fileExtension = fileName.split('.').pop()?.toLowerCase();
@@ -1255,7 +1176,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
 
           {/* Task Card */}
           <View className="bg-white rounded-2xl p-6 mb-6 shadow-sm">
-            {/* Overload Warning Banner */}
             {showOverloadWarning && (
               <View className="bg-red-50 border-l-4 border-red-500 rounded-lg p-4 mb-4">
                 <View className="flex-row items-start gap-3">
@@ -1270,7 +1190,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </View>
             )}
             
-            {/* Title and Status */}
             <View className="mb-4">
               <View className="flex-row items-center justify-between mb-4">
                 <View className="flex-row items-center flex-1">
@@ -1290,7 +1209,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 )}
               </View>
               
-              {/* Only show "Mark as Complete" button if user is the admin (task creator) */}
               {!task.completed && currentUser?.uid === task.createdBy && (
                 <TouchableOpacity 
                   onPress={() => setShowCompleteConfirmModal(true)}
@@ -1302,7 +1220,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               )}
             </View>
 
-            {/* Status Badge */}
             <View className="mb-4">
               <View className={`self-start px-3 py-1 rounded-full border ${getPriorityColor(task.priority)}`}>
                 <Text className={`text-sm font-semibold ${getPriorityColor(task.priority).split(' ')[0]}`}>
@@ -1311,7 +1228,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </View>
             </View>
 
-            {/* Due Date */}
             <View className="border-t border-gray-100 pt-4 mb-4">
               <View className="flex-row items-center mb-2">
                 <Ionicons name="calendar-outline" size={18} color="#6B7280" />
@@ -1329,7 +1245,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </Text>
             </View>
 
-            {/* Created by */}
             <View className="border-t border-gray-100 pt-4 mb-4">
               <View className="flex-row items-center mb-2">
                 <Ionicons name="person-outline" size={18} color="#6B7280" />
@@ -1347,7 +1262,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </Text>
             </View>
 
-            {/* Assigned Members */}
             {task.assignedTo && task.assignedTo.length > 0 && (
               <View className="border-t border-gray-100 pt-4 mb-4">
                 <View className="flex-row items-center mb-3">
@@ -1396,7 +1310,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </View>
             )}
 
-            {/* Description with mention highlighting */}
             {task.description ? (
               <View className="border-t border-gray-100 pt-4 mb-4">
                 <Text className="text-gray-600 font-semibold mb-2">Description</Text>
@@ -1406,7 +1319,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </View>
             ) : null}
 
-            {/* Attachments - Clickable to download */}
             {task.fileUrls && task.fileUrls.length > 0 && (
               <View className="border-t border-gray-100 pt-4">
                 <Text className="text-gray-600 font-semibold mb-3">
@@ -1447,7 +1359,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
 
           {/* Submissions and Discussion Tabs */}
           <View className="bg-white rounded-2xl p-6 shadow-sm">
-            {/* Tab Switcher */}
             <View className="flex-row border-b border-gray-200 mb-4">
               <TouchableOpacity
                 onPress={() => setActiveTab('submissions')}
@@ -1467,7 +1378,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </TouchableOpacity>
             </View>
 
-            {/* SUBMISSIONS TAB */}
             {activeTab === 'submissions' && (
               <View>
                 <TouchableOpacity
@@ -1483,7 +1393,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 ) : (
                   submissions.map((submission) => (
                     <View key={submission.id} className="bg-gray-50 rounded-xl p-4 mb-3 border border-gray-200">
-                      {/* Member Info Header */}
                       <View className="flex-row items-center justify-between mb-3 pb-3 border-b border-gray-200">
                         <View className="flex-row items-center flex-1">
                           {submission.profileImage ? (
@@ -1536,12 +1445,10 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                         </View>
                       </View>
 
-                      {/* Note */}
                       {submission.note && (
                         <Text className="text-gray-700 mb-2">{submission.note}</Text>
                       )}
 
-                      {/* Link */}
                       {submission.link && (
                         <TouchableOpacity
                           onPress={() => Linking.openURL(submission.link!)}
@@ -1554,7 +1461,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                         </TouchableOpacity>
                       )}
 
-                      {/* Files */}
                       {submission.fileUrls && submission.fileUrls.length > 0 && (
                         <View className="mt-2 mb-2">
                           {submission.fileUrls.map((url, idx) => {
@@ -1582,7 +1488,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                         </View>
                       )}
 
-                      {/* Photos */}
                       {submission.photoUrls && submission.photoUrls.length > 0 && (
                         <View className="mt-2">
                           {submission.photoUrls.map((url, idx) => (
@@ -1600,7 +1505,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                         </View>
                       )}
 
-                      {/* Admin Review Section */}
                       {submission.adminReview && (
                         <View className={`mt-3 p-3 rounded-lg ${submission.adminReview.status === 'Approved' ? 'bg-green-50 border border-green-200' : 'bg-orange-50 border border-orange-200'}`}>
                           <View className="flex-row items-center mb-2">
@@ -1622,10 +1526,8 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </View>
             )}
 
-            {/* DISCUSSION TAB */}
             {activeTab === 'discussion' && (
               <View>
-                {/* Comments List */}
                 <View className="space-y-4 mb-4">
                   {comments.length === 0 ? (
                     <Text className="text-gray-400 text-center py-4">No comments yet</Text>
@@ -1649,7 +1551,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                           <Text className="text-gray-700 ml-10">{comment.comment}</Text>
                         ) : null}
                         
-                        {/* Comment Attachments */}
                         {comment.fileUrls && comment.fileUrls.length > 0 && (
                           <View className="ml-10 mt-2">
                             {comment.fileUrls.map((url, idx) => {
@@ -1681,7 +1582,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                   )}
                 </View>
 
-                {/* Add Comment Input */}
                 <View className="border-t border-gray-200 pt-4">
                   <TextInput
                     className="border border-gray-300 rounded-xl p-3 mb-3"
@@ -1784,7 +1684,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              {/* Submitter Info */}
               {selectedSubmissionForReview && (
                 <View className="bg-gray-50 rounded-lg p-4 mb-4">
                   <Text className="text-sm text-gray-500 mb-1">Submitted by</Text>
@@ -1795,7 +1694,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 </View>
               )}
 
-              {/* Status Picker */}
               <View className="mb-4">
                 <Text className="text-sm font-semibold text-gray-700 mb-3">Review Status</Text>
                 <View className="flex-row gap-3">
@@ -1820,7 +1718,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 </View>
               </View>
 
-              {/* Review Note */}
               <View className="mb-4">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">Feedback (Optional)</Text>
                 <TextInput
@@ -1833,7 +1730,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 />
               </View>
 
-              {/* Submit Button */}
               <TouchableOpacity
                 onPress={handleReviewSubmission}
                 disabled={isSubmittingReview}
@@ -1884,7 +1780,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              {/* Link Input */}
               <View className="mb-4">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">Link (Optional)</Text>
                 <TextInput
@@ -1896,7 +1791,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 />
               </View>
 
-              {/* Note Input */}
               <View className="mb-4">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">Note</Text>
                 <TextInput
@@ -1909,7 +1803,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 />
               </View>
 
-              {/* Status Picker */}
               <View className="mb-4">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">Status</Text>
                 <View className="flex-row gap-3">
@@ -1932,7 +1825,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 </View>
               </View>
 
-              {/* File Upload */}
               <View className="mb-4">
                 <View className="flex-row justify-between items-center mb-2">
                   <Text className="text-sm font-semibold text-gray-700">Files (Optional)</Text>
@@ -1982,7 +1874,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 )}
               </View>
 
-              {/* Photo Upload */}
               <View className="mb-4">
                 <View className="flex-row justify-between items-center mb-2">
                   <Text className="text-sm font-semibold text-gray-700">Photos (Optional)</Text>
@@ -2032,7 +1923,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 )}
               </View>
 
-              {/* Submit Button */}
               <TouchableOpacity
                 onPress={handleAddSubmission}
                 disabled={isAddingComment || !submissionNote.trim()}
@@ -2068,7 +1958,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              {/* Title Input */}
               <View className="mb-4">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">Title</Text>
                 <TextInput
@@ -2080,7 +1969,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 />
               </View>
 
-              {/* Description Input with @mention */}
               <View className="mb-4 relative">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">
                   Description (Use @ to mention team members)
@@ -2095,7 +1983,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                   placeholderTextColor="#9CA3AF"
                 />
                 
-                {/* Mention Suggestions Modal */}
                 {showMentions && members.length > 0 && (
                   <View className="absolute top-24 left-0 right-0 bg-white rounded-xl shadow-lg border border-gray-100 max-h-64 z-10">
                     <FlatList
@@ -2183,7 +2070,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 )}
               </View>
 
-              {/* File Upload */}
               <View className="mb-4">
                 <View className="flex-row justify-between items-center mb-2">
                   <Text className="text-sm font-semibold text-gray-700">
@@ -2248,7 +2134,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 )}
               </View>
 
-              {/* Priority */}
               <View className="mb-4">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">Priority</Text>
                 <TouchableOpacity
@@ -2267,7 +2152,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 </TouchableOpacity>
               </View>
 
-              {/* Deadline */}
               <View className="mb-4">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">Deadline (Date & Time)</Text>
                 <TouchableOpacity
@@ -2291,7 +2175,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 </TouchableOpacity>
               </View>
 
-              {/* Action Buttons */}
               <View className="flex-row gap-3 mt-6">
                 <TouchableOpacity
                   onPress={() => setShowEditModal(false)}
