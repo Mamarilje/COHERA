@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { collection, query, getDocs, where, updateDoc, deleteDoc, doc, and, getDoc } from "firebase/firestore";
 import { db } from "../../src/Firebase/firebaseConfig";
 import { getAuth } from "firebase/auth";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 
 interface Task {
   id: string;
@@ -13,10 +13,13 @@ interface Task {
   deadline: string;
   priority: 'High' | 'Medium' | 'Low';
   completed: boolean;
+  status?: 'todo' | 'in progress' | 'completed';
   groupId: string;
   groupName?: string;
   createdBy: string;
   createdAt: any;
+  completedBy?: string[];
+  archived?: boolean;
 }
 
 interface Group {
@@ -55,20 +58,48 @@ const getPriorityStyles = (priority: string) => {
 
 export default function Tasks() {
   const auth = getAuth();
+  const router = useRouter();
   const currentUser = auth.currentUser;
   const [tasks, setTasks] = useState<Task[]>([]);
   const [groups, setGroups] = useState<Map<string, string>>(new Map());
   const [groupsList, setGroupsList] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeStatus, setActiveStatus] = useState<'all' | 'todo' | 'inprogress' | 'completed' | 'overdue'>('all');
+  const [activeStatus, setActiveStatus] = useState<'all' | 'todo' | 'inprogress' | 'completed' | 'overdue' | 'notcomplete' | 'archive'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>('all');
   const [showGroupFilter, setShowGroupFilter] = useState(false);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
+
+  const fetchUnreadNotifications = async () => {
+    if (!currentUser) return;
+
+    try {
+      const notificationsQuery = query(
+        collection(db, 'notifications'),
+        where('userId', '==', currentUser.uid),
+        where('read', '==', false)
+      );
+
+      const snapshot = await getDocs(notificationsQuery);
+      setUnreadNotificationsCount(snapshot.size);
+    } catch (error) {
+      console.error('Error fetching unread notifications:', error);
+    }
+  };
+
+  const loadAllData = async () => {
+    await Promise.all([
+      fetchAllTasks(),
+      fetchUnreadNotifications(),
+    ]);
+  };
 
   useFocusEffect(
     useCallback(() => {
-      fetchAllData();
+      if (currentUser) {
+        loadAllData();
+      }
     }, [currentUser])
   );
 
@@ -118,21 +149,52 @@ export default function Tasks() {
         const tasksQuery = query(tasksRef, where('groupId', '==', groupId));
         const tasksSnapshot = await getDocs(tasksQuery);
         
-        tasksSnapshot.forEach((doc) => {
-          const data = doc.data();
+        for (const taskDoc of tasksSnapshot.docs) {
+          const data = taskDoc.data();
+          let taskStatus = data.status || 'todo';
+          
+          // Check if task is completed (either globally or by members)
+          if (data.completed || (data.completedBy && data.completedBy.length > 0)) {
+            taskStatus = 'completed';
+          } else {
+            // Check if task has any submissions with 'Progress' status
+            try {
+              const submissionsRef = collection(db, 'submissions');
+              const submissionsQuery = query(submissionsRef, where('taskId', '==', taskDoc.id));
+              const submissionsSnapshot = await getDocs(submissionsQuery);
+              
+              // Check if any submission has 'Progress' status
+              const hasProgressSubmission = submissionsSnapshot.docs.some(
+                (subDoc) => subDoc.data().status === 'Progress'
+              );
+              
+              if (hasProgressSubmission) {
+                taskStatus = 'in progress';
+              }
+            } catch (subError: any) {
+              // Skip submission check if there are permission issues
+              if (subError.code !== 'permission-denied') {
+                console.error('Error checking submissions:', subError);
+              }
+            }
+          }
+          
           fetchedTasks.push({
-            id: doc.id,
+            id: taskDoc.id,
             title: data.title || '',
             description: data.description || '',
             deadline: data.deadline || '',
             priority: data.priority || 'Medium',
             completed: data.completed || false,
+            status: taskStatus,
             groupId: groupId,
             groupName: groupsMap.get(groupId) || 'Unknown Group',
             createdBy: data.createdBy || '',
             createdAt: data.createdAt,
+            completedBy: data.completedBy || [],
+            archived: data.archived || false,
           });
-        });
+        }
       }
       
       // Sort tasks by deadline (earliest first)
@@ -165,14 +227,16 @@ export default function Tasks() {
     }
   };
 
-  const deleteTask = async (taskId: string) => {
+  const archiveTask = async (taskId: string) => {
     try {
-      await deleteDoc(doc(db, 'tasks', taskId));
+      await updateDoc(doc(db, 'tasks', taskId), {
+        archived: true,
+      });
       fetchAllTasks();
-      Alert.alert('Success', 'Task deleted');
+      Alert.alert('Success', 'Task archived');
     } catch (error) {
-      console.error('Error deleting task:', error);
-      Alert.alert('Error', 'Failed to delete task');
+      console.error('Error archiving task:', error);
+      Alert.alert('Error', 'Failed to archive task');
     }
   };
 
@@ -184,17 +248,14 @@ export default function Tasks() {
     taskDateNormalized.setHours(0, 0, 0, 0);
     
     // Check if overdue first
-    if (taskDateNormalized < today) return 'Overdue';
+    if (taskDateNormalized < today) return 'Overdue Tasks';
     
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
-    const nextWeek = new Date(today);
-    nextWeek.setDate(nextWeek.getDate() + 7);
 
     if (taskDateNormalized.getTime() === today.getTime()) return 'Today';
     if (taskDateNormalized.getTime() === tomorrow.getTime()) return 'Tomorrow';
-    if (taskDateNormalized <= nextWeek) return 'Next Week';
-    return 'Later';
+    return 'Upcoming';
   };
 
   const isOverdue = (deadline: string, completed: boolean) => {
@@ -211,11 +272,13 @@ export default function Tasks() {
     : tasks;
 
   const statusCounts = {
-    all: groupFilteredTasks.length,
-    todo: groupFilteredTasks.filter(task => !task.completed && !isOverdue(task.deadline, task.completed)).length,
-    inprogress: groupFilteredTasks.filter(task => !task.completed && !isOverdue(task.deadline, task.completed)).length,
-    completed: groupFilteredTasks.filter(task => task.completed).length,
-    overdue: groupFilteredTasks.filter(task => !task.completed && isOverdue(task.deadline, task.completed)).length,
+    all: groupFilteredTasks.filter(task => !task.archived).length,
+    todo: groupFilteredTasks.filter(task => !task.completed && !isOverdue(task.deadline, task.completed) && !task.archived).length,
+    inprogress: groupFilteredTasks.filter(task => task.status === 'in progress' && !task.archived).length,
+    completed: groupFilteredTasks.filter(task => (task.completed || (task.completedBy && task.completedBy.length > 0)) && !task.archived).length,
+    overdue: groupFilteredTasks.filter(task => !task.completed && isOverdue(task.deadline, task.completed) && !task.archived).length,
+    notcomplete: groupFilteredTasks.filter(task => !task.completed && !task.archived).length,
+    archive: groupFilteredTasks.filter(task => task.archived).length,
   };
 
   const getFilteredTasks = () => {
@@ -230,18 +293,27 @@ export default function Tasks() {
     if (activeStatus !== 'all') {
       switch (activeStatus) {
         case 'todo':
-          filtered = filtered.filter(task => !task.completed && !isOverdue(task.deadline, task.completed));
+          filtered = filtered.filter(task => !task.completed && !isOverdue(task.deadline, task.completed) && !task.archived);
           break;
         case 'inprogress':
-          filtered = filtered.filter(task => !task.completed && !isOverdue(task.deadline, task.completed));
+          filtered = filtered.filter(task => task.status === 'in progress' && !task.completed && !task.archived);
           break;
         case 'completed':
-          filtered = filtered.filter(task => task.completed);
+          filtered = filtered.filter(task => (task.completed || (task.completedBy && task.completedBy.length > 0)) && !task.archived);
           break;
         case 'overdue':
-          filtered = filtered.filter(task => !task.completed && isOverdue(task.deadline, task.completed));
+          filtered = filtered.filter(task => !task.completed && isOverdue(task.deadline, task.completed) && !task.archived);
+          break;
+        case 'notcomplete':
+          filtered = filtered.filter(task => !task.completed && !task.archived);
+          break;
+        case 'archive':
+          filtered = filtered.filter(task => task.archived);
           break;
       }
+    } else {
+      // Default filter: exclude archived tasks
+      filtered = filtered.filter(task => !task.archived);
     }
     
     // Apply search filter
@@ -262,9 +334,14 @@ export default function Tasks() {
   
   filteredTasks.forEach(task => {
     let category: string;
-    if (activeStatus === 'overdue') {
+    if (activeStatus === 'archive') {
+      category = 'Archived Tasks';
+    } else if (activeStatus === 'overdue') {
       category = 'Overdue Tasks';
-    } else if (task.completed) {
+    } else if (activeStatus === 'notcomplete') {
+      // For 'Not Complete', show all incomplete tasks by deadline
+      category = getDateCategory(task.deadline);
+    } else if (task.completed || (task.completedBy && task.completedBy.length > 0)) {
       category = 'Completed';
     } else {
       category = getDateCategory(task.deadline);
@@ -277,7 +354,7 @@ export default function Tasks() {
   });
 
   // Custom order for categories
-  const categoryOrder = ['Overdue Tasks', 'Today', 'Tomorrow', 'Next Week', 'Later', 'Completed'];
+  const categoryOrder = ['Overdue Tasks', 'Today', 'Tomorrow', 'Upcoming', 'Completed', 'Archived Tasks'];
 
   const renderTaskSection = (title: string, sectionTasks: Task[]) => {
     if (sectionTasks.length === 0) return null;
@@ -290,31 +367,29 @@ export default function Tasks() {
         
         {sectionTasks.map((task) => {
           const priorityStyles = getPriorityStyles(task.priority);
-          const isTaskOverdue = !task.completed && isOverdue(task.deadline, task.completed);
+          const isTaskCompleted = task.completed || (task.completedBy && task.completedBy.length > 0);
+          const isTaskOverdue = !isTaskCompleted && isOverdue(task.deadline, task.completed);
           
           return (
-            <View
+            <TouchableOpacity
               key={task.id}
+              onPress={() => router.push(`/task/${task.id}`)}
               className={`bg-white rounded-xl p-4 mb-3 border-l-4 ${priorityStyles.borderColor} shadow-sm ${
                 isTaskOverdue ? 'bg-red-50' : ''
               }`}
             >
               <View className="flex-row items-start">
-                <TouchableOpacity 
-                  onPress={() => toggleTaskComplete(task.id, task.completed)}
-                  className="mt-1"
-                >
-                  <Ionicons
-                    name={task.completed ? "checkbox" : "square-outline"}
-                    size={22}
-                    color={task.completed ? "#22C55E" : "#9CA3AF"}
-                  />
-                </TouchableOpacity>
-                
-                <View className="ml-3 flex-1">
-                  <Text className={`font-semibold text-base ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
-                    {task.title}
-                  </Text>
+                <View className="flex-1">
+                  <View className="flex-row items-center gap-2 mb-1">
+                    <Text className={`font-semibold text-base ${isTaskCompleted ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                      {task.title}
+                    </Text>
+                    {isTaskCompleted && (
+                      <View className="bg-green-100 px-2 py-0.5 rounded">
+                        <Ionicons name="checkmark-circle" size={14} color="#22C55E" />
+                      </View>
+                    )}
+                  </View>
                   
                   <View className="flex-row items-center mt-1">
                     <Ionicons name="calendar-outline" size={12} color="#9CA3AF" />
@@ -344,22 +419,23 @@ export default function Tasks() {
                     </Text>
                   </View>
                   <TouchableOpacity
-                    onPress={() => {
-                      Alert.alert('Delete Task', 'Are you sure you want to delete this task?', [
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      Alert.alert('Archive Task', 'Are you sure you want to archive this task?', [
                         { text: 'Cancel', style: 'cancel' },
                         {
-                          text: 'Delete',
+                          text: 'Archive',
                           style: 'destructive',
-                          onPress: () => deleteTask(task.id),
+                          onPress: () => archiveTask(task.id),
                         },
                       ]);
                     }}
                   >
-                    <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                    <Ionicons name="archive-outline" size={20} color="#9CA3AF" />
                   </TouchableOpacity>
                 </View>
               </View>
-            </View>
+            </TouchableOpacity>
           );
         })}
       </View>
@@ -385,8 +461,18 @@ export default function Tasks() {
           <TouchableOpacity onPress={() => setShowSearch(!showSearch)}>
             <Ionicons name="search-outline" size={22} color="#666" />
           </TouchableOpacity>
-          <TouchableOpacity>
+          <TouchableOpacity 
+            onPress={() => router.push('/notifications' as any)}
+            className="relative"
+          >
             <Ionicons name="notifications-outline" size={22} color="#666" />
+            {unreadNotificationsCount > 0 && (
+              <View className="absolute -top-1 -right-1 bg-red-500 rounded-full w-5 h-5 items-center justify-center">
+                <Text className="text-white text-xs font-bold">
+                  {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -460,6 +546,20 @@ export default function Tasks() {
             </Text>
           </TouchableOpacity>
 
+          {/* NOT COMPLETE STATUS */}
+          <TouchableOpacity 
+            onPress={() => setActiveStatus('notcomplete')}
+            className={`px-5 py-3 rounded-xl ${
+              activeStatus === 'notcomplete' ? 'bg-cyan-500' : 'bg-white'
+            } shadow-sm`}
+          >
+            <Text className={`font-semibold ${
+              activeStatus === 'notcomplete' ? 'text-white' : 'text-gray-700'
+            }`}>
+              Not Complete ({statusCounts.notcomplete})
+            </Text>
+          </TouchableOpacity>
+
           {/* TODO STATUS */}
           <TouchableOpacity 
             onPress={() => setActiveStatus('todo')}
@@ -515,6 +615,20 @@ export default function Tasks() {
               Overdue ({statusCounts.overdue})
             </Text>
           </TouchableOpacity>
+
+          {/* ARCHIVE STATUS */}
+          <TouchableOpacity 
+            onPress={() => setActiveStatus('archive')}
+            className={`px-5 py-3 rounded-xl ${
+              activeStatus === 'archive' ? 'bg-gray-600' : 'bg-white'
+            } shadow-sm`}
+          >
+            <Text className={`font-semibold ${
+              activeStatus === 'archive' ? 'text-white' : 'text-gray-700'
+            }`}>
+              Archive ({statusCounts.archive})
+            </Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
 
@@ -525,11 +639,15 @@ export default function Tasks() {
           <Text className="text-gray-400 text-center mt-4 font-medium">
             {searchQuery 
               ? `No tasks found matching "${searchQuery}"`
-              : activeStatus === 'overdue' 
+              : activeStatus === 'archive'
+                ? 'No archived tasks'
+                : activeStatus === 'overdue' 
                 ? 'No overdue tasks! Great job!' 
                 : activeStatus === 'completed' 
                   ? 'No completed tasks yet' 
-                  : 'No tasks found'}
+                  : activeStatus === 'notcomplete'
+                    ? 'No incomplete tasks! You\'re all caught up!'
+                    : 'No tasks found'}
           </Text>
           <Text className="text-gray-300 text-xs text-center mt-2">
             {searchQuery 

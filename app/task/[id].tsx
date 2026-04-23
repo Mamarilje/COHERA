@@ -19,6 +19,7 @@ import { getAuth } from 'firebase/auth';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+import * as MediaLibrary from 'expo-media-library';
 import {
   doc,
   getDoc,
@@ -34,6 +35,11 @@ import {
 import { db } from '../../src/Firebase/firebaseConfig';
 import { supabase } from '../../src/Supabase/supabaseConfig';
 import { firestore } from '../../src/Firebase/firebaseConfig';
+import {
+  notifyAdminMemberSubmitted,
+  notifyAdminMemberCommented,
+  notifyMemberWorkReviewed,
+} from '../../src/utils/notificationHelper';
 
 type Task = {
   id: string;
@@ -43,6 +49,7 @@ type Task = {
   deadline: string;
   assignedTo: string[];
   completed: boolean;
+  completedBy?: string[];
   createdBy: string;
   createdAt: any;
   fileUrls?: string[];
@@ -69,6 +76,28 @@ type TaskComment = {
   fileNames?: string[];
 };
 
+type TaskSubmission = {
+  id: string;
+  taskId: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  link?: string;
+  fileUrls?: string[];
+  fileNames?: string[];
+  photoUrls?: string[];
+  note: string;
+  status: 'Complete' | 'Progress';
+  createdAt: string;
+  profileImage?: string;
+  adminReview?: {
+    status: 'Approved' | 'Need Revise';
+    note?: string;
+    reviewedBy: string;
+    reviewedAt: string;
+  };
+};
+
 export default function TaskDetail() {
   const router = useRouter();
   const { id } = useLocalSearchParams();
@@ -78,8 +107,21 @@ export default function TaskDetail() {
   const [task, setTask] = useState<Task | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [comments, setComments] = useState<TaskComment[]>([]);
+  const [submissions, setSubmissions] = useState<TaskSubmission[]>([]);
+  const [activeTab, setActiveTab] = useState<'submissions' | 'discussion'>('submissions');
+  const [showSubmissionModal, setShowSubmissionModal] = useState(false);
+  const [submissionLink, setSubmissionLink] = useState('');
+  const [submissionNote, setSubmissionNote] = useState('');
+  const [submissionStatus, setSubmissionStatus] = useState<'Complete' | 'Progress'>('Progress');
+  const [submissionFiles, setSubmissionFiles] = useState<{ name: string; uri: string }[]>([]);
+  const [submissionPhotos, setSubmissionPhotos] = useState<{ name: string; uri: string }[]>([]);
   const [newComment, setNewComment] = useState('');
   const [commentFiles, setCommentFiles] = useState<{ name: string; uri: string }[]>([]);
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [selectedSubmissionForReview, setSelectedSubmissionForReview] = useState<TaskSubmission | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<'Approved' | 'Need Revise'>('Approved');
+  const [reviewNote, setReviewNote] = useState('');
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isAddingComment, setIsAddingComment] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -109,10 +151,24 @@ export default function TaskDetail() {
   const [editFiles, setEditFiles] = useState<{ name: string; uri: string; url?: string }[]>([]);
 
   const [refreshing, setRefreshing] = useState(false);
+  
+  // Task completion confirmation modal state
+  const [showCompleteConfirmModal, setShowCompleteConfirmModal] = useState(false);
+  const [isMarkingComplete, setIsMarkingComplete] = useState(false);
 
   useEffect(() => {
     fetchTaskDetails();
+    requestMediaPermissions();
   }, [id]);
+
+  const requestMediaPermissions = async () => {
+    if (Platform.OS === 'android' || Platform.OS === 'ios') {
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        console.log('Media library permission not granted');
+      }
+    }
+  };
 
   const fetchTaskDetails = async () => {
     if (!id) return;
@@ -138,11 +194,11 @@ export default function TaskDetail() {
       } catch (error) {
         console.error('Error fetching creator:', error);
       }
-      taskData.createdBy = creatorName;
+      
+      (taskData as any).creatorName = creatorName;
       
       setTask(taskData);
 
-      // Debug file URLs
       if (taskData.fileUrls && taskData.fileUrls.length > 0) {
         console.log('=== TASK FILE URLS ===');
         taskData.fileUrls.forEach((url, index) => {
@@ -222,7 +278,41 @@ export default function TaskDetail() {
 
       fetchComments();
       
-      // Check if current user has task overload
+      const fetchSubmissions = async () => {
+        try {
+          const submissionsQuery = query(
+            collection(firestore, 'submissions'),
+            where('taskId', '==', id)
+          );
+
+          const submissionsSnapshot = await getDocs(submissionsQuery);
+          const submissionsData = submissionsSnapshot.docs
+            .map((doc) => ({
+              id: doc.id,
+              taskId: doc.data().taskId,
+              userId: doc.data().userId,
+              userName: doc.data().userName,
+              userEmail: doc.data().userEmail,
+              link: doc.data().link,
+              fileUrls: doc.data().fileUrls,
+              fileNames: doc.data().fileNames,
+              photoUrls: doc.data().photoUrls,
+              note: doc.data().note,
+              status: doc.data().status,
+              createdAt: doc.data().createdAt,
+              profileImage: members.find(m => m.uid === doc.data().userId)?.profileImage,
+              adminReview: doc.data().adminReview,
+            }))
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+          setSubmissions(submissionsData);
+        } catch (error) {
+          console.error('Error fetching submissions:', error);
+        }
+      };
+
+      fetchSubmissions();
+      
       if (taskData && taskData.assignedTo && taskData.assignedTo.includes(currentUser?.uid || '')) {
         checkTaskOverload(taskData);
       }
@@ -261,14 +351,29 @@ export default function TaskDetail() {
   const toggleTaskComplete = async () => {
     if (!task) return;
     
+    if (currentUser?.uid !== task.createdBy) {
+      Alert.alert('Error', 'Only the task creator can mark it as complete');
+      return;
+    }
+    
     try {
+      setIsMarkingComplete(true);
+      
+      const completedBy = task.completedBy || [];
+      
       await updateDoc(doc(db, 'tasks', task.id), {
-        completed: !task.completed,
+        completedBy: completedBy,
+        completed: true,
       });
-      setTask({ ...task, completed: !task.completed });
+      
+      setTask({ ...task, completed: true, completedBy });
+      setShowCompleteConfirmModal(false);
+      Alert.alert('Success', 'Task marked as complete');
     } catch (error) {
       console.error('Error updating task:', error);
-      Alert.alert('Error', 'Failed to update task');
+      Alert.alert('Error', 'Failed to mark task as complete');
+    } finally {
+      setIsMarkingComplete(false);
     }
   };
 
@@ -346,7 +451,6 @@ export default function TaskDetail() {
     }
   };
 
-  // Helper function to get MIME type
   const getMimeType = (fileName: string): string => {
     const extension = fileName.split('.').pop()?.toLowerCase() || '';
     const mimeTypes: { [key: string]: string } = {
@@ -369,147 +473,239 @@ export default function TaskDetail() {
     return mimeTypes[extension] || 'application/octet-stream';
   };
 
-  // Helper function to check if file is an image
   const isImageFile = (fileName: string): boolean => {
     const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'];
     const extension = fileName.split('.').pop()?.toLowerCase() || '';
     return imageExtensions.includes(extension);
   };
 
-  // Optional: Save image to gallery (requires expo-media-library)
-  const saveToGallery = async (filePath: string) => {
+  // Validate file size before download
+  const validateFileSize = async (fileUrl: string, maxSizeMB: number = 200): Promise<boolean> => {
     try {
-      const MediaLibrary = require('expo-media-library');
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      if (status === 'granted') {
-        const asset = await MediaLibrary.createAssetAsync(filePath);
-        await MediaLibrary.createAlbumAsync('Download', asset, false);
-        Alert.alert('Success', 'Image saved to gallery');
+      const response = await fetch(fileUrl, { method: 'HEAD' });
+      const contentLength = response.headers.get('content-length');
+      
+      if (contentLength) {
+        const fileSizeMB = parseInt(contentLength) / (1024 * 1024);
+        if (fileSizeMB > maxSizeMB) {
+          Alert.alert(
+            'File Too Large',
+            `File size is ${fileSizeMB.toFixed(2)}MB. Maximum allowed is ${maxSizeMB}MB.`,
+            [{ text: 'OK' }]
+          );
+          return false;
+        }
       }
+      return true;
     } catch (error) {
-      console.error('Error saving to gallery:', error);
+      console.log('Could not validate file size (continuing anyway):', error);
+      return true;
     }
   };
 
-
-const downloadFile = async (fileUrl: string, fileName: string) => {
-  if (!fileUrl) {
-    Alert.alert('Error', 'No file URL provided');
-    return;
-  }
-
-  setDownloadingFile(fileName);
-
-  try {
-    console.log('Starting download for:', fileName);
-    console.log('File URL:', fileUrl);
-
-    // Web handling
-    if (Platform.OS === 'web') {
-      window.open(fileUrl, '_blank');
-      setDownloadingFile(null);
-      return;
-    }
-
-    const isSharingAvailable = await Sharing.isAvailableAsync();
-
-    if (!isSharingAvailable) {
-      const canOpen = await Linking.canOpenURL(fileUrl);
-      if (canOpen) {
-        await Linking.openURL(fileUrl);
-      } else {
-        Alert.alert('Error', 'Cannot open this file type');
+  // Request storage permission for Android
+  const requestStoragePermission = async (): Promise<boolean> => {
+    if (Platform.OS === 'web') return true;
+    
+    try {
+      if (Platform.OS === 'android' || Platform.OS === 'ios') {
+        const { status } = await MediaLibrary.requestPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert(
+            'Permission Required',
+            'This app needs storage permission to download files. Please grant permission in settings.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings() }
+            ]
+          );
+          return false;
+        }
       }
-      setDownloadingFile(null);
+      return true;
+    } catch (error) {
+      console.error('Permission error:', error);
+      // Continue anyway - the download might still work without explicit permission
+      return true;
+    }
+  };
+
+  // Download with retry logic
+  const downloadWithRetry = async (url: string, filePath: string, maxRetries: number = 3): Promise<any> => {
+    let lastError: any;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        console.log(`Download attempt ${attempt + 1}/${maxRetries} for: ${filePath}`);
+        const result = await FileSystem.downloadAsync(url, filePath);
+        return result;
+      } catch (error) {
+        lastError = error;
+        console.error(`Download attempt ${attempt + 1} failed:`, error);
+        
+        if (attempt < maxRetries - 1) {
+          const delayMs = Math.pow(2, attempt) * 1000;
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
+    }
+    
+    throw lastError;
+  };
+
+  // Save image to gallery
+  const saveToGallery = async (filePath: string) => {
+    try {
+      const asset = await MediaLibrary.createAssetAsync(filePath);
+      const albums = await MediaLibrary.getAlbumsAsync();
+      let downloadAlbum = albums.find(album => album.title === 'Download');
+      
+      if (!downloadAlbum) {
+        await MediaLibrary.createAlbumAsync('Download', asset, false);
+      } else {
+        await MediaLibrary.addAssetsToAlbumAsync([asset], downloadAlbum, false);
+      }
+      return true;
+    } catch (error) {
+      console.error('Error saving to gallery:', error);
+      return false;
+    }
+  };
+
+  // Main download function
+  const downloadFile = async (fileUrl: string, fileName: string) => {
+    if (!fileUrl) {
+      Alert.alert('Error', 'No file URL provided');
       return;
     }
 
-    const cacheDir = (FileSystem as any).documentDirectory || (FileSystem as any).cacheDirectory || '';
-    let downloadDir = cacheDir ? cacheDir + 'Download/' : '';
+    setDownloadingFile(fileName);
 
     try {
-      const dirInfo = await FileSystem.getInfoAsync(downloadDir);
-      if (!dirInfo.exists) {
-        await FileSystem.makeDirectoryAsync(downloadDir, {
-          intermediates: true,
-        });
+      console.log('Starting download for:', fileName);
+      console.log('File URL:', fileUrl);
+
+      // Web handling
+      if (Platform.OS === 'web') {
+        window.open(fileUrl, '_blank');
+        setDownloadingFile(null);
+        return;
       }
-    } catch (error) {
-      console.error('Error creating directory:', error);
-      downloadDir = cacheDir;
-    }
 
-    const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const uniqueFileName = `${Date.now()}_${safeFileName}`;
-    const filePath = downloadDir + uniqueFileName;
+      // Validate file size
+      const isValidSize = await validateFileSize(fileUrl, 200);
+      if (!isValidSize) {
+        setDownloadingFile(null);
+        return;
+      }
 
-    console.log('Downloading to:', filePath);
+      // Request permission
+      const hasPermission = await requestStoragePermission();
+      if (!hasPermission) {
+        setDownloadingFile(null);
+        return;
+      }
 
-    const downloadResult = await FileSystem.downloadAsync(fileUrl, filePath);
-
-    if (downloadResult.status === 200) {
-      console.log('Download completed successfully');
-
+      // Create unique filename
+      const timestamp = Date.now();
+      const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const uniqueFileName = `${timestamp}_${safeFileName}`;
+      
+      if (Platform.OS === 'android') {
+        // For Android: Download directly to Downloads folder via MediaLibrary
+        // This makes files visible in the file manager
+        try {
+          console.log('Downloading to Downloads folder...');
+          
+          // Download to cache first as temporary storage
+          const cacheDir = (FileSystem as any).cacheDirectory || '';
+          const tempFilePath = cacheDir + uniqueFileName;
+          
+          // Download file with retry
+          const downloadResult = await downloadWithRetry(fileUrl, tempFilePath, 3);
+          
+          if (downloadResult.status === 200) {
+            console.log('Download completed, saving to Downloads...');
+            
+            // Create asset in MediaLibrary (this makes it visible in file manager)
+            const asset = await MediaLibrary.createAssetAsync(tempFilePath);
+            console.log('Asset created:', asset.uri);
+            
+            // Get or create Downloads album
+            const albums = await MediaLibrary.getAlbumsAsync();
+            let downloadsAlbum = albums.find(album => album.title === 'Downloads');
+            
+            if (!downloadsAlbum) {
+              console.log('Creating Downloads folder...');
+              await MediaLibrary.createAlbumAsync('Downloads', asset, false);
+            } else {
+              console.log('Adding to existing Downloads folder...');
+              await MediaLibrary.addAssetsToAlbumAsync([asset], downloadsAlbum, false);
+            }
+            
+            // Show success message
+            Alert.alert(
+              '✅ Download Complete',
+              `${fileName}\n\nFile saved to Downloads folder. You can find it in your file manager.`,
+              [{ text: 'OK', style: 'default' }]
+            );
+            
+            // Clean up temp file
+            await FileSystem.deleteAsync(tempFilePath, { idempotent: true });
+          } else {
+            throw new Error(`Download failed with status: ${downloadResult.status}`);
+          }
+        } catch (error) {
+          console.error('Android download error:', error);
+          throw error;
+        }
+      } else if (Platform.OS === 'ios') {
+        // For iOS: Save to Documents and use share sheet
+        const documentsDir = (FileSystem as any).documentDirectory || '';
+        const fileUri = documentsDir + uniqueFileName;
+        
+        console.log('Downloading to iOS documents...');
+        const downloadResult = await downloadWithRetry(fileUrl, fileUri, 3);
+        
+        if (downloadResult.status === 200) {
+          console.log('Download completed');
+          
+          // Save to files app using Sharing
+          if (await Sharing.isAvailableAsync()) {
+            await Sharing.shareAsync(fileUri, {
+              mimeType: getMimeType(fileName),
+              dialogTitle: `Save ${fileName} to Files`,
+            });
+          }
+          
+          Alert.alert(
+            '✅ Download Complete',
+            `${fileName} has been saved. Check your Files app or tap "Save to Files" when prompted.`,
+            [{ text: 'OK' }]
+          );
+        } else {
+          throw new Error(`Download failed with status: ${downloadResult.status}`);
+        }
+      }
+      
+    } catch (error: any) {
+      console.error('Download error details:', error);
+      
       Alert.alert(
-        'Download Complete',
-        `${fileName} has been downloaded successfully.`,
+        'Download Failed',
+        `Could not download ${fileName}. ${error.message || 'Please try again.'}`,
         [
-          { text: 'Close', style: 'cancel' },
+          { text: 'Cancel', style: 'cancel' },
           {
-            text: 'Open',
-            onPress: async () => {
-              try {
-                await Sharing.shareAsync(filePath, {
-                  mimeType: getMimeType(fileName),
-                  dialogTitle: `Open ${fileName}`,
-                });
-              } catch (error) {
-                console.error('Error sharing file:', error);
-                Alert.alert('Error', 'Could not open the file');
-              }
-            },
+            text: 'Open in Browser',
+            onPress: () => Linking.openURL(fileUrl),
           },
         ]
       );
-    } else {
-      throw new Error(`Download failed with status: ${downloadResult.status}`);
+    } finally {
+      setDownloadingFile(null);
     }
-  } catch (error: any) {
-    console.error('Download error details:', error);
-
-    try {
-      const canOpen = await Linking.canOpenURL(fileUrl);
-      if (canOpen) {
-        Alert.alert(
-          'Download Failed',
-          'Would you like to open the file in browser instead?',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Open in Browser',
-              onPress: () => Linking.openURL(fileUrl),
-            },
-          ]
-        );
-      } else {
-        Alert.alert(
-          'Download Failed',
-          `Could not download "${fileName}". ${
-            error.message || 'Please try again.'
-          }`
-        );
-      }
-    } catch {
-      Alert.alert(
-        'Download Failed',
-        `Could not download "${fileName}". Please check your internet connection and try again.`
-      );
-    }
-  } finally {
-    setDownloadingFile(null);
-  }
-};
-  
+  };
 
   const uploadFiles = async (files: { name: string; uri: string }[]): Promise<string[]> => {
     const uploadedUrls: string[] = [];
@@ -623,11 +819,23 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
         uploadedUrls = uploadedFiles;
         uploadedNames = commentFiles.map(f => f.name);
       }
+
+      let userName = currentUser?.displayName || 'Anonymous';
+      try {
+        if (currentUser?.uid) {
+          const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+          if (userDoc.exists()) {
+            userName = userDoc.data().name || userDoc.data().displayName || currentUser.displayName || 'Anonymous';
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching user name:', error);
+      }
       
       const commentData = {
         taskId: task.id,
         userId: currentUser?.uid || '',
-        userName: currentUser?.displayName || 'Anonymous',
+        userName: userName,
         userEmail: currentUser?.email || '',
         comment: newComment,
         createdAt: new Date().toISOString(),
@@ -643,6 +851,17 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
       };
       setComments(prev => [newCommentObj, ...prev]);
       
+      if (task.createdBy && task.createdBy !== currentUser?.uid) {
+        await notifyAdminMemberCommented(
+          task.createdBy,
+          userName,
+          task.title,
+          task.id,
+          task.groupId || '',
+          currentUser?.uid || ''
+        );
+      }
+      
       setNewComment('');
       setCommentFiles([]);
       
@@ -652,6 +871,210 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
     } finally {
       setIsAddingComment(false);
     }
+  };
+
+  const handleAddSubmission = async () => {
+    if (!task || !submissionNote.trim()) {
+      Alert.alert('Error', 'Please add a note to your submission');
+      return;
+    }
+
+    setIsAddingComment(true);
+    
+    try {
+      let uploadedFileUrls: string[] = [];
+      let uploadedFileNames: string[] = [];
+      let uploadedPhotoUrls: string[] = [];
+      
+      if (submissionFiles.length > 0) {
+        const uploadedFiles = await uploadFiles(submissionFiles);
+        uploadedFileUrls = uploadedFiles;
+        uploadedFileNames = submissionFiles.map(f => f.name);
+      }
+      
+      if (submissionPhotos.length > 0) {
+        uploadedPhotoUrls = await uploadFiles(submissionPhotos);
+      }
+
+      let userName = currentUser?.displayName || 'Anonymous';
+      try {
+        if (currentUser?.uid) {
+          const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+          if (userDoc.exists()) {
+            userName = userDoc.data().name || userDoc.data().displayName || currentUser.displayName || 'Anonymous';
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching user name:', error);
+      }
+      
+      const submissionData: any = {
+        taskId: task.id,
+        userId: currentUser?.uid || '',
+        userName: userName,
+        userEmail: currentUser?.email || '',
+        note: submissionNote,
+        status: submissionStatus,
+        createdAt: new Date().toISOString(),
+        taskCreatedBy: task.createdBy || '',
+      };
+
+      if (submissionLink.trim()) {
+        submissionData.link = submissionLink;
+      }
+      if (uploadedFileUrls.length > 0) {
+        submissionData.fileUrls = uploadedFileUrls;
+        submissionData.fileNames = uploadedFileNames;
+      }
+      if (uploadedPhotoUrls.length > 0) {
+        submissionData.photoUrls = uploadedPhotoUrls;
+      }
+      
+      const docRef = await addDoc(collection(firestore, 'submissions'), submissionData);
+      
+      const newSubmissionObj: TaskSubmission = {
+        id: docRef.id,
+        ...submissionData,
+        profileImage: members.find(m => m.uid === currentUser?.uid)?.profileImage,
+      };
+      setSubmissions(prev => [newSubmissionObj, ...prev]);
+      
+      if (task.createdBy) {
+        await notifyAdminMemberSubmitted(
+          task.createdBy,
+          userName,
+          currentUser?.email || '',
+          task.id,
+          task.title,
+          task.groupId || '',
+          currentUser?.uid || ''
+        );
+      }
+      
+      setSubmissionLink('');
+      setSubmissionNote('');
+      setSubmissionStatus('Progress');
+      setSubmissionFiles([]);
+      setSubmissionPhotos([]);
+      setShowSubmissionModal(false);
+      
+      Alert.alert('Success', 'Your submission has been uploaded');
+      
+    } catch (error) {
+      console.error('Error adding submission:', error);
+      Alert.alert('Error', 'Failed to upload submission. Please try again.');
+    } finally {
+      setIsAddingComment(false);
+    }
+  };
+
+  const handleReviewSubmission = async () => {
+    if (!task || !selectedSubmissionForReview) {
+      Alert.alert('Error', 'No submission selected');
+      return;
+    }
+
+    setIsSubmittingReview(true);
+
+    try {
+      const reviewData = {
+        adminReview: {
+          status: reviewStatus,
+          note: reviewNote || undefined,
+          reviewedBy: currentUser?.uid || '',
+          reviewedAt: new Date().toISOString(),
+        },
+      };
+
+      await updateDoc(doc(firestore, 'submissions', selectedSubmissionForReview.id), reviewData);
+
+      const adminName = currentUser?.displayName || 'Admin';
+      await notifyMemberWorkReviewed(
+        selectedSubmissionForReview.userId,
+        reviewStatus,
+        task.title,
+        task.id,
+        task.groupId || '',
+        adminName,
+        currentUser?.uid || '',
+        reviewNote
+      );
+
+      if (reviewStatus === 'Approved') {
+        const completedBy = task.completedBy || [];
+        const submittingUserId = selectedSubmissionForReview.userId;
+        
+        if (!completedBy.includes(submittingUserId)) {
+          completedBy.push(submittingUserId);
+          
+          const assignedMembers = task.assignedTo || [];
+          const allMembersCompleted = assignedMembers.length > 0 && completedBy.length === assignedMembers.length;
+          
+          const updateData: any = {
+            completedBy: completedBy,
+          };
+          
+          if (allMembersCompleted) {
+            updateData.completed = true;
+          }
+          
+          await updateDoc(doc(db, 'tasks', task.id), updateData);
+          
+          setTask({ ...task, completedBy, ...(allMembersCompleted && { completed: true }) });
+        }
+        
+        setSubmissions(prev =>
+          prev.map(sub =>
+            sub.id === selectedSubmissionForReview.id
+              ? { ...sub, adminReview: reviewData.adminReview }
+              : sub
+          )
+        );
+      } else {
+        setSubmissions(prev =>
+          prev.map(sub =>
+            sub.id === selectedSubmissionForReview.id
+              ? { ...sub, adminReview: reviewData.adminReview }
+              : sub
+          )
+        );
+      }
+
+      setShowReviewModal(false);
+      setSelectedSubmissionForReview(null);
+      setReviewStatus('Approved');
+      setReviewNote('');
+
+      if (reviewStatus === 'Approved') {
+        const completedBy = task.completedBy || [];
+        const submittingUserId = selectedSubmissionForReview.userId;
+        const newCompletedCount = completedBy.includes(submittingUserId) ? completedBy.length : completedBy.length + 1;
+        const assignedCount = task.assignedTo?.length || 0;
+        const isTaskFullyCompleted = newCompletedCount === assignedCount;
+
+        Alert.alert(
+          'Success',
+          `Submission has been marked as "${reviewStatus}"${reviewNote ? ' with a note' : ''}${isTaskFullyCompleted ? ' - All assigned members completed, task marked as complete' : reviewStatus === 'Approved' ? ' - Member task marked as complete' : ''}`
+        );
+      } else {
+        Alert.alert(
+          'Success',
+          `Submission has been marked as "${reviewStatus}"${reviewNote ? ' with a note' : ''}`
+        );
+      }
+    } catch (error) {
+      console.error('Error reviewing submission:', error);
+      Alert.alert('Error', 'Failed to review submission. Please try again.');
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
+
+  const openReviewModal = (submission: TaskSubmission) => {
+    setSelectedSubmissionForReview(submission);
+    setReviewStatus(submission.adminReview?.status || 'Approved');
+    setReviewNote(submission.adminReview?.note || '');
+    setShowReviewModal(true);
   };
 
   const getPriorityColor = (priority: string) => {
@@ -700,7 +1123,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
     );
   };
 
-  // Get file icon based on extension
   const getFileIcon = (fileName: string, isDownloading: boolean) => {
     if (isDownloading) return null;
     const fileExtension = fileName.split('.').pop()?.toLowerCase();
@@ -754,7 +1176,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
 
           {/* Task Card */}
           <View className="bg-white rounded-2xl p-6 mb-6 shadow-sm">
-            {/* Overload Warning Banner */}
             {showOverloadWarning && (
               <View className="bg-red-50 border-l-4 border-red-500 rounded-lg p-4 mb-4">
                 <View className="flex-row items-start gap-3">
@@ -769,23 +1190,36 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </View>
             )}
             
-            {/* Title and Status */}
-            <View className="flex-row items-center justify-between mb-4">
-              <View className="flex-row items-center flex-1">
-                <TouchableOpacity onPress={toggleTaskComplete} className="mr-3">
-                  <Ionicons 
-                    name={task.completed ? 'checkbox' : 'checkbox-outline'} 
-                    size={28} 
-                    color={task.completed ? '#22C55E' : '#9CA3AF'} 
-                  />
-                </TouchableOpacity>
-                <Text className={`text-2xl font-bold flex-1 ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
-                  {task.title}
-                </Text>
+            <View className="mb-4">
+              <View className="flex-row items-center justify-between mb-4">
+                <View className="flex-row items-center flex-1">
+                  {(task.completed || (task.completedBy && task.completedBy.length > 0)) && (
+                    <View className="mr-3">
+                      <Ionicons name="checkmark-circle" size={24} color="#22C55E" />
+                    </View>
+                  )}
+                  <Text className={`text-2xl font-bold flex-1 ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                    {task.title}
+                  </Text>
+                </View>
+                {(task.completed || (task.completedBy && task.completedBy.length > 0)) && (
+                  <View className="bg-green-100 px-3 py-1 rounded-full ml-2 flex-row items-center gap-1">
+                    <Text className="text-green-700 font-semibold text-xs">Completed</Text>
+                  </View>
+                )}
               </View>
+              
+              {!task.completed && currentUser?.uid === task.createdBy && (
+                <TouchableOpacity 
+                  onPress={() => setShowCompleteConfirmModal(true)}
+                  className="bg-green-500 rounded-lg py-2 px-4 flex-row items-center justify-center"
+                >
+                  <Ionicons name="checkmark-done" size={18} color="white" />
+                  <Text className="text-white font-semibold ml-2">Mark as Complete</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
-            {/* Status Badge */}
             <View className="mb-4">
               <View className={`self-start px-3 py-1 rounded-full border ${getPriorityColor(task.priority)}`}>
                 <Text className={`text-sm font-semibold ${getPriorityColor(task.priority).split(' ')[0]}`}>
@@ -794,7 +1228,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </View>
             </View>
 
-            {/* Due Date */}
             <View className="border-t border-gray-100 pt-4 mb-4">
               <View className="flex-row items-center mb-2">
                 <Ionicons name="calendar-outline" size={18} color="#6B7280" />
@@ -812,14 +1245,13 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </Text>
             </View>
 
-            {/* Created by */}
             <View className="border-t border-gray-100 pt-4 mb-4">
               <View className="flex-row items-center mb-2">
                 <Ionicons name="person-outline" size={18} color="#6B7280" />
                 <Text className="text-gray-600 ml-2 font-semibold">Created by</Text>
               </View>
               <Text className="text-gray-800">
-                {typeof task.createdBy === 'string' ? task.createdBy : 'Unknown'} • {(() => {
+                {typeof (task as any).creatorName === 'string' ? (task as any).creatorName : 'Unknown'} • {(() => {
                   try {
                     const date = task.createdAt?.toDate ? task.createdAt.toDate() : new Date(task.createdAt);
                     return date.toLocaleDateString();
@@ -830,7 +1262,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
               </Text>
             </View>
 
-            {/* Assigned Members */}
             {task.assignedTo && task.assignedTo.length > 0 && (
               <View className="border-t border-gray-100 pt-4 mb-4">
                 <View className="flex-row items-center mb-3">
@@ -840,41 +1271,54 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 <View className="gap-2">
                   {members
                     .filter(member => task.assignedTo.includes(member.uid))
-                    .map((member) => (
-                      <View key={member.uid} className="flex-row items-center gap-3 bg-yellow-50 rounded-lg p-3">
-                        {member.profileImage ? (
-                          <Image
-                            source={{ uri: member.profileImage }}
-                            className="w-8 h-8 rounded-full"
-                          />
-                        ) : (
-                          <View className="w-8 h-8 bg-yellow-200 rounded-full items-center justify-center">
-                            <Text className="text-yellow-700 font-bold text-xs">
-                              {member.name.charAt(0).toUpperCase()}
+                    .map((member) => {
+                      const isCompleted = task.completedBy?.includes(member.uid) || false;
+                      return (
+                        <View key={member.uid} className={`flex-row items-center gap-3 rounded-lg p-3 ${isCompleted ? 'bg-green-50' : 'bg-yellow-50'}`}>
+                          {member.profileImage ? (
+                            <Image
+                              source={{ uri: member.profileImage }}
+                              className="w-8 h-8 rounded-full"
+                            />
+                          ) : (
+                            <View className={`w-8 h-8 rounded-full items-center justify-center ${isCompleted ? 'bg-green-200' : 'bg-yellow-200'}`}>
+                              <Text className={`font-bold text-xs ${isCompleted ? 'text-green-700' : 'text-yellow-700'}`}>
+                                {member.name.charAt(0).toUpperCase()}
+                              </Text>
+                            </View>
+                          )}
+                          <View className="flex-1">
+                            <Text className="font-semibold text-gray-800">{member.name}</Text>
+                            {member.email && (
+                              <Text className="text-xs text-gray-500">{member.email}</Text>
+                            )}
+                          </View>
+                          <View className={`px-3 py-1 rounded-full flex-row items-center gap-1 ${isCompleted ? 'bg-green-100' : 'bg-yellow-100'}`}>
+                            <Ionicons 
+                              name={isCompleted ? "checkmark-circle" : "ellipse-outline"} 
+                              size={14} 
+                              color={isCompleted ? "#22C55E" : "#F59E0B"} 
+                            />
+                            <Text className={`text-xs font-semibold ${isCompleted ? 'text-green-700' : 'text-yellow-700'}`}>
+                              {isCompleted ? 'Completed' : 'Pending'}
                             </Text>
                           </View>
-                        )}
-                        <View className="flex-1">
-                          <Text className="font-semibold text-gray-800">{member.name}</Text>
-                          {member.email && (
-                            <Text className="text-xs text-gray-500">{member.email}</Text>
-                          )}
                         </View>
-                      </View>
-                    ))}
+                      );
+                    })}
                 </View>
               </View>
             )}
 
-            {/* Description with mention highlighting */}
             {task.description ? (
               <View className="border-t border-gray-100 pt-4 mb-4">
                 <Text className="text-gray-600 font-semibold mb-2">Description</Text>
-                {renderDescriptionWithMentions(task.description)}
+                <View>
+                  {renderDescriptionWithMentions(task.description)}
+                </View>
               </View>
             ) : null}
 
-            {/* Attachments - Clickable to download */}
             {task.fileUrls && task.fileUrls.length > 0 && (
               <View className="border-t border-gray-100 pt-4">
                 <Text className="text-gray-600 font-semibold mb-3">
@@ -913,98 +1357,479 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
             )}
           </View>
 
-          {/* Comments Section */}
+          {/* Submissions and Discussion Tabs */}
           <View className="bg-white rounded-2xl p-6 shadow-sm">
-            <Text className="text-lg font-bold text-gray-800 mb-4">
-              Comments ({comments.length})
-            </Text>
-
-            {/* Comments List */}
-            <View className="space-y-4 mb-4">
-              {comments.length === 0 ? (
-                <Text className="text-gray-400 text-center py-4">No comments yet</Text>
-              ) : (
-                comments.map((comment) => (
-                  <View key={comment.id} className="bg-gray-50 rounded-xl p-4">
-                    <View className="flex-row items-center mb-2">
-                      <View className="w-8 h-8 bg-yellow-200 rounded-full items-center justify-center mr-2">
-                        <Text className="text-yellow-700 font-bold text-sm">
-                          {comment.userName?.charAt(0).toUpperCase() || 'U'}
-                        </Text>
-                      </View>
-                      <View className="flex-1">
-                        <Text className="font-semibold text-gray-800">{comment.userName}</Text>
-                        <Text className="text-xs text-gray-400">
-                          {new Date(comment.createdAt).toLocaleDateString()} • {new Date(comment.createdAt).toLocaleTimeString()}
-                        </Text>
-                      </View>
-                    </View>
-                    {comment.comment ? (
-                      <Text className="text-gray-700 ml-10">{comment.comment}</Text>
-                    ) : null}
-                    
-                    {/* Comment Attachments - Clickable to download */}
-                    {comment.fileUrls && comment.fileUrls.length > 0 && (
-                      <View className="ml-10 mt-2">
-                        {comment.fileUrls.map((url, idx) => {
-                          const fileName = comment.fileNames?.[idx] || `Attachment ${idx + 1}`;
-                          const isDownloading = downloadingFile === fileName;
-                          
-                          return (
-                            <TouchableOpacity
-                              key={idx}
-                              onPress={() => downloadFile(url, fileName)}
-                              disabled={isDownloading}
-                              className="flex-row items-center bg-white rounded-lg p-2 mt-1"
-                            >
-                              {isDownloading ? (
-                                <ActivityIndicator size="small" color="#EAB308" />
-                              ) : (
-                                <Ionicons name="download-outline" size={14} color="#EAB308" />
-                              )}
-                              <Text className="text-xs text-gray-600 ml-1" numberOfLines={1}>
-                                {fileName}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-                    )}
-                  </View>
-                ))
-              )}
+            <View className="flex-row border-b border-gray-200 mb-4">
+              <TouchableOpacity
+                onPress={() => setActiveTab('submissions')}
+                className={`flex-1 pb-3 border-b-2 ${activeTab === 'submissions' ? 'border-yellow-400' : 'border-transparent'}`}
+              >
+                <Text className={`text-center font-semibold ${activeTab === 'submissions' ? 'text-yellow-400' : 'text-gray-400'}`}>
+                  Submissions ({submissions.length})
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setActiveTab('discussion')}
+                className={`flex-1 pb-3 border-b-2 ${activeTab === 'discussion' ? 'border-yellow-400' : 'border-transparent'}`}
+              >
+                <Text className={`text-center font-semibold ${activeTab === 'discussion' ? 'text-yellow-400' : 'text-gray-400'}`}>
+                  Discussion ({comments.length})
+                </Text>
+              </TouchableOpacity>
             </View>
 
-            {/* Add Comment Input */}
-            <View className="border-t border-gray-200 pt-4">
-              <TextInput
-                className="border border-gray-300 rounded-xl p-3 mb-3"
-                placeholder="Add a comment..."
-                value={newComment}
-                onChangeText={setNewComment}
-                multiline
-                placeholderTextColor="#9CA3AF"
-              />
-              
-              {commentFiles.length > 0 && (
-                <View className="mb-3">
-                  {commentFiles.map((file, index) => (
-                    <View key={index} className="flex-row items-center justify-between bg-gray-50 rounded-lg p-2 mb-1">
-                      <View className="flex-row items-center flex-1">
-                        <Ionicons name="document-text" size={16} color="#EAB308" />
-                        <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
-                          {file.name}
-                        </Text>
+            {activeTab === 'submissions' && (
+              <View>
+                <TouchableOpacity
+                  onPress={() => setShowSubmissionModal(true)}
+                  className="bg-yellow-400 rounded-xl p-4 mb-4 flex-row items-center justify-center"
+                >
+                  <Ionicons name="add-circle-outline" size={20} color="white" />
+                  <Text className="text-white font-semibold ml-2">Submit Your Work</Text>
+                </TouchableOpacity>
+
+                {submissions.length === 0 ? (
+                  <Text className="text-gray-400 text-center py-4">No submissions yet</Text>
+                ) : (
+                  submissions.map((submission) => (
+                    <View key={submission.id} className="bg-gray-50 rounded-xl p-4 mb-3 border border-gray-200">
+                      <View className="flex-row items-center justify-between mb-3 pb-3 border-b border-gray-200">
+                        <View className="flex-row items-center flex-1">
+                          {submission.profileImage ? (
+                            <Image
+                              source={{ uri: submission.profileImage }}
+                              className="w-10 h-10 rounded-full mr-3"
+                            />
+                          ) : (
+                            <View className="w-10 h-10 bg-yellow-200 rounded-full items-center justify-center mr-3">
+                              <Text className="text-yellow-700 font-bold text-sm">
+                                {submission.userName?.charAt(0).toUpperCase() || 'U'}
+                              </Text>
+                            </View>
+                          )}
+                          <View className="flex-1">
+                            <Text className="text-base font-bold text-gray-900">
+                              {submission.userName || 'Anonymous'}
+                            </Text>
+                            <Text className="text-xs text-gray-500 mt-0.5">
+                              {new Date(submission.createdAt).toLocaleDateString()} at {new Date(submission.createdAt).toLocaleTimeString()}
+                            </Text>
+                          </View>
+                        </View>
+                        <View className="flex-row items-center gap-2">
+                          {task && currentUser?.uid === task.createdBy && (
+                            <TouchableOpacity
+                              onPress={() => openReviewModal(submission)}
+                              className="bg-blue-500 rounded-lg px-3 py-1.5 flex-row items-center"
+                            >
+                              <Ionicons name="checkmark-done" size={14} color="white" />
+                              <Text className="text-white text-xs font-semibold ml-1">Review</Text>
+                            </TouchableOpacity>
+                          )}
+                          <View className={`px-3 py-1.5 rounded-full ${
+                            submission.adminReview 
+                              ? (submission.adminReview.status === 'Approved' ? 'bg-green-100' : 'bg-orange-100')
+                              : (submission.status === 'Complete' ? 'bg-green-100' : 'bg-blue-100')
+                          }`}>
+                            <Text className={`text-xs font-bold ${
+                              submission.adminReview 
+                                ? (submission.adminReview.status === 'Approved' ? 'text-green-700' : 'text-orange-700')
+                                : (submission.status === 'Complete' ? 'text-green-700' : 'text-blue-700')
+                            }`}>
+                              {submission.adminReview 
+                                ? (submission.adminReview.status === 'Approved' ? 'Approved' : 'Need Revision')
+                                : submission.status
+                              }
+                            </Text>
+                          </View>
+                        </View>
                       </View>
-                      <TouchableOpacity onPress={() => setCommentFiles(commentFiles.filter((_, i) => i !== index))}>
-                        <Ionicons name="close-circle" size={18} color="#EF4444" />
-                      </TouchableOpacity>
+
+                      {submission.note && (
+                        <Text className="text-gray-700 mb-2">{submission.note}</Text>
+                      )}
+
+                      {submission.link && (
+                        <TouchableOpacity
+                          onPress={() => Linking.openURL(submission.link!)}
+                          className="flex-row items-center bg-white rounded-lg p-2 mb-2"
+                        >
+                          <Ionicons name="link" size={16} color="#3B82F6" />
+                          <Text className="text-blue-500 ml-2 flex-1 underline" numberOfLines={1}>
+                            {submission.link}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+
+                      {submission.fileUrls && submission.fileUrls.length > 0 && (
+                        <View className="mt-2 mb-2">
+                          {submission.fileUrls.map((url, idx) => {
+                            const fileName = submission.fileNames?.[idx] || `File ${idx + 1}`;
+                            const isDownloading = downloadingFile === fileName;
+                            
+                            return (
+                              <TouchableOpacity
+                                key={idx}
+                                onPress={() => downloadFile(url, fileName)}
+                                disabled={isDownloading}
+                                className="flex-row items-center bg-white rounded-lg p-2 mb-1"
+                              >
+                                {isDownloading ? (
+                                  <ActivityIndicator size="small" color="#EAB308" />
+                                ) : (
+                                  <Ionicons name="document-outline" size={16} color="#EAB308" />
+                                )}
+                                <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
+                                  {fileName}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                      )}
+
+                      {submission.photoUrls && submission.photoUrls.length > 0 && (
+                        <View className="mt-2">
+                          {submission.photoUrls.map((url, idx) => (
+                            <TouchableOpacity
+                              key={idx}
+                              onPress={() => Linking.openURL(url)}
+                              className="bg-white rounded-lg p-2 mb-1"
+                            >
+                              <Image
+                                source={{ uri: url }}
+                                className="w-full h-32 rounded-lg"
+                              />
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+
+                      {submission.adminReview && (
+                        <View className={`mt-3 p-3 rounded-lg ${submission.adminReview.status === 'Approved' ? 'bg-green-50 border border-green-200' : 'bg-orange-50 border border-orange-200'}`}>
+                          <View className="flex-row items-center mb-2">
+                            <Ionicons name={submission.adminReview.status === 'Approved' ? 'checkmark-circle' : 'alert-circle'} size={18} color={submission.adminReview.status === 'Approved' ? '#10B981' : '#F97316'} />
+                            <Text className={`font-semibold ml-2 ${submission.adminReview.status === 'Approved' ? 'text-green-700' : 'text-orange-700'}`}>
+                              {submission.adminReview.status === 'Approved' ? 'Approved' : 'Needs Revision'}
+                            </Text>
+                          </View>
+                          {submission.adminReview.note && (
+                            <Text className={`text-sm ${submission.adminReview.status === 'Approved' ? 'text-green-600' : 'text-orange-600'}`}>
+                              {submission.adminReview.note}
+                            </Text>
+                          )}
+                        </View>
+                      )}
                     </View>
-                  ))}
+                  ))
+                )}
+              </View>
+            )}
+
+            {activeTab === 'discussion' && (
+              <View>
+                <View className="space-y-4 mb-4">
+                  {comments.length === 0 ? (
+                    <Text className="text-gray-400 text-center py-4">No comments yet</Text>
+                  ) : (
+                    comments.map((comment) => (
+                      <View key={comment.id} className="bg-gray-50 rounded-xl p-4">
+                        <View className="flex-row items-center mb-2">
+                          <View className="w-8 h-8 bg-yellow-200 rounded-full items-center justify-center mr-2">
+                            <Text className="text-yellow-700 font-bold text-sm">
+                              {comment.userName?.charAt(0).toUpperCase() || 'U'}
+                            </Text>
+                          </View>
+                          <View className="flex-1">
+                            <Text className="font-semibold text-gray-800">{comment.userName}</Text>
+                            <Text className="text-xs text-gray-400">
+                              {new Date(comment.createdAt).toLocaleDateString()} • {new Date(comment.createdAt).toLocaleTimeString()}
+                            </Text>
+                          </View>
+                        </View>
+                        {comment.comment ? (
+                          <Text className="text-gray-700 ml-10">{comment.comment}</Text>
+                        ) : null}
+                        
+                        {comment.fileUrls && comment.fileUrls.length > 0 && (
+                          <View className="ml-10 mt-2">
+                            {comment.fileUrls.map((url, idx) => {
+                              const fileName = comment.fileNames?.[idx] || `Attachment ${idx + 1}`;
+                              const isDownloading = downloadingFile === fileName;
+                              
+                              return (
+                                <TouchableOpacity
+                                  key={idx}
+                                  onPress={() => downloadFile(url, fileName)}
+                                  disabled={isDownloading}
+                                  className="flex-row items-center bg-white rounded-lg p-2 mt-1"
+                                >
+                                  {isDownloading ? (
+                                    <ActivityIndicator size="small" color="#EAB308" />
+                                  ) : (
+                                    <Ionicons name="download-outline" size={14} color="#EAB308" />
+                                  )}
+                                  <Text className="text-xs text-gray-600 ml-1" numberOfLines={1}>
+                                    {fileName}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        )}
+                      </View>
+                    ))
+                  )}
+                </View>
+
+                <View className="border-t border-gray-200 pt-4">
+                  <TextInput
+                    className="border border-gray-300 rounded-xl p-3 mb-3"
+                    placeholder="Add a comment..."
+                    value={newComment}
+                    onChangeText={setNewComment}
+                    multiline
+                    placeholderTextColor="#9CA3AF"
+                  />
+                  
+                  {commentFiles.length > 0 && (
+                    <View className="mb-3">
+                      {commentFiles.map((file, index) => (
+                        <View key={index} className="flex-row items-center justify-between bg-gray-50 rounded-lg p-2 mb-1">
+                          <View className="flex-row items-center flex-1">
+                            <Ionicons name="document-text" size={16} color="#EAB308" />
+                            <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
+                              {file.name}
+                            </Text>
+                          </View>
+                          <TouchableOpacity onPress={() => setCommentFiles(commentFiles.filter((_, i) => i !== index))}>
+                            <Ionicons name="close-circle" size={18} color="#EF4444" />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  
+                  <View className="flex-row justify-between items-center">
+                    <TouchableOpacity
+                      onPress={async () => {
+                        try {
+                          const result = await DocumentPicker.getDocumentAsync({
+                            multiple: true,
+                            type: '*/*',
+                          });
+                          
+                          if (result.assets && result.assets.length > 0) {
+                            const newFiles = result.assets.map((asset) => ({
+                              name: asset.name,
+                              uri: asset.uri,
+                            }));
+                            setCommentFiles([...commentFiles, ...newFiles]);
+                          }
+                        } catch (error) {
+                          console.error('Error picking files:', error);
+                        }
+                      }}
+                      className="flex-row items-center"
+                    >
+                      <Ionicons name="attach-outline" size={24} color="#EAB308" />
+                      <Text className="text-xs text-amber-500 ml-1">Add file</Text>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity
+                      onPress={handleAddComment}
+                      disabled={isAddingComment || (!newComment.trim() && commentFiles.length === 0)}
+                      className={`px-6 py-2 rounded-xl ${(newComment.trim() || commentFiles.length > 0) ? 'bg-yellow-400' : 'bg-gray-200'}`}
+                    >
+                      {isAddingComment ? (
+                        <ActivityIndicator size="small" color="white" />
+                      ) : (
+                        <Text className={`font-semibold ${(newComment.trim() || commentFiles.length > 0) ? 'text-white' : 'text-gray-400'}`}>
+                          Post
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
+      </ScrollView>
+
+      {/* Admin Review Modal */}
+      <Modal
+        visible={showReviewModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setShowReviewModal(false);
+          setSelectedSubmissionForReview(null);
+          setReviewStatus('Approved');
+          setReviewNote('');
+        }}
+      >
+        <View className="flex-1 bg-black/50 justify-end">
+          <View className="bg-white rounded-t-3xl p-6 max-h-[90%]">
+            <View className="flex-row items-center justify-between mb-6">
+              <Text className="text-xl font-bold text-gray-800">Review Submission</Text>
+              <TouchableOpacity onPress={() => {
+                setShowReviewModal(false);
+                setSelectedSubmissionForReview(null);
+                setReviewStatus('Approved');
+                setReviewNote('');
+              }}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {selectedSubmissionForReview && (
+                <View className="bg-gray-50 rounded-lg p-4 mb-4">
+                  <Text className="text-sm text-gray-500 mb-1">Submitted by</Text>
+                  <Text className="font-semibold text-gray-800">{selectedSubmissionForReview.userName}</Text>
+                  <Text className="text-xs text-gray-400">
+                    {new Date(selectedSubmissionForReview.createdAt).toLocaleDateString()} • {new Date(selectedSubmissionForReview.createdAt).toLocaleTimeString()}
+                  </Text>
                 </View>
               )}
-              
-              <View className="flex-row justify-between items-center">
+
+              <View className="mb-4">
+                <Text className="text-sm font-semibold text-gray-700 mb-3">Review Status</Text>
+                <View className="flex-row gap-3">
+                  <TouchableOpacity
+                    onPress={() => setReviewStatus('Approved')}
+                    className={`flex-1 p-4 rounded-lg border-2 items-center ${reviewStatus === 'Approved' ? 'bg-green-200 border-green-400' : 'bg-white border-gray-300'}`}
+                  >
+                    <Ionicons name="checkmark-circle" size={24} color={reviewStatus === 'Approved' ? '#10B981' : '#9CA3AF'} />
+                    <Text className={`text-sm font-semibold mt-2 ${reviewStatus === 'Approved' ? 'text-green-700' : 'text-gray-700'}`}>
+                      Approved
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setReviewStatus('Need Revise')}
+                    className={`flex-1 p-4 rounded-lg border-2 items-center ${reviewStatus === 'Need Revise' ? 'bg-orange-200 border-orange-400' : 'bg-white border-gray-300'}`}
+                  >
+                    <Ionicons name="alert-circle" size={24} color={reviewStatus === 'Need Revise' ? '#F97316' : '#9CA3AF'} />
+                    <Text className={`text-sm font-semibold mt-2 ${reviewStatus === 'Need Revise' ? 'text-orange-700' : 'text-gray-700'}`}>
+                      Need Revise
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View className="mb-4">
+                <Text className="text-sm font-semibold text-gray-700 mb-2">Feedback (Optional)</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-lg p-3 h-24"
+                  placeholder="Add feedback for the student..."
+                  value={reviewNote}
+                  onChangeText={setReviewNote}
+                  multiline
+                  placeholderTextColor="#9CA3AF"
+                />
+              </View>
+
+              <TouchableOpacity
+                onPress={handleReviewSubmission}
+                disabled={isSubmittingReview}
+                className="bg-blue-500 rounded-lg p-4 flex-row items-center justify-center"
+              >
+                {isSubmittingReview ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-done" size={20} color="white" />
+                    <Text className="text-white font-semibold ml-2">Submit Review</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Submit Work Modal */}
+      <Modal
+        visible={showSubmissionModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setShowSubmissionModal(false);
+          setSubmissionLink('');
+          setSubmissionNote('');
+          setSubmissionStatus('Progress');
+          setSubmissionFiles([]);
+          setSubmissionPhotos([]);
+        }}
+      >
+        <View className="flex-1 bg-black/50 justify-end">
+          <View className="bg-white rounded-t-3xl p-6 max-h-[90%]">
+            <View className="flex-row items-center justify-between mb-6">
+              <Text className="text-xl font-bold text-gray-800">Submit Your Work</Text>
+              <TouchableOpacity onPress={() => {
+                setShowSubmissionModal(false);
+                setSubmissionLink('');
+                setSubmissionNote('');
+                setSubmissionStatus('Progress');
+                setSubmissionFiles([]);
+                setSubmissionPhotos([]);
+              }}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View className="mb-4">
+                <Text className="text-sm font-semibold text-gray-700 mb-2">Link (Optional)</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-lg p-3"
+                  placeholder="https://example.com"
+                  value={submissionLink}
+                  onChangeText={setSubmissionLink}
+                  placeholderTextColor="#9CA3AF"
+                />
+              </View>
+
+              <View className="mb-4">
+                <Text className="text-sm font-semibold text-gray-700 mb-2">Note</Text>
+                <TextInput
+                  className="border border-gray-300 rounded-lg p-3 h-24"
+                  placeholder="Add a note about your submission..."
+                  value={submissionNote}
+                  onChangeText={setSubmissionNote}
+                  multiline
+                  placeholderTextColor="#9CA3AF"
+                />
+              </View>
+
+              <View className="mb-4">
+                <Text className="text-sm font-semibold text-gray-700 mb-2">Status</Text>
+                <View className="flex-row gap-3">
+                  <TouchableOpacity
+                    onPress={() => setSubmissionStatus('Progress')}
+                    className={`flex-1 p-3 rounded-lg border ${submissionStatus === 'Progress' ? 'bg-blue-200 border-blue-400' : 'bg-white border-gray-300'}`}
+                  >
+                    <Text className={`text-center font-semibold ${submissionStatus === 'Progress' ? 'text-blue-700' : 'text-gray-700'}`}>
+                      Progress
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setSubmissionStatus('Complete')}
+                    className={`flex-1 p-3 rounded-lg border ${submissionStatus === 'Complete' ? 'bg-green-200 border-green-400' : 'bg-white border-gray-300'}`}
+                  >
+                    <Text className={`text-center font-semibold ${submissionStatus === 'Complete' ? 'text-green-700' : 'text-gray-700'}`}>
+                      Complete
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View className="mb-4">
+                <View className="flex-row justify-between items-center mb-2">
+                  <Text className="text-sm font-semibold text-gray-700">Files (Optional)</Text>
+                  <Text className="text-xs text-gray-500">{submissionFiles.length} selected</Text>
+                </View>
                 <TouchableOpacity
                   onPress={async () => {
                     try {
@@ -1012,42 +1837,109 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                         multiple: true,
                         type: '*/*',
                       });
-                      
+
                       if (result.assets && result.assets.length > 0) {
                         const newFiles = result.assets.map((asset) => ({
                           name: asset.name,
                           uri: asset.uri,
                         }));
-                        setCommentFiles([...commentFiles, ...newFiles]);
+                        setSubmissionFiles([...submissionFiles, ...newFiles]);
                       }
                     } catch (error) {
                       console.error('Error picking files:', error);
                     }
                   }}
-                  className="flex-row items-center"
+                  className="border-2 border-dashed border-gray-300 rounded-lg p-4 items-center"
                 >
-                  <Ionicons name="attach-outline" size={24} color="#EAB308" />
-                  <Text className="text-xs text-amber-500 ml-1">Add file</Text>
+                  <Ionicons name="document-attach" size={24} color="#9CA3AF" />
+                  <Text className="text-gray-600 mt-2 text-sm">Tap to add files</Text>
                 </TouchableOpacity>
-                
-                <TouchableOpacity
-                  onPress={handleAddComment}
-                  disabled={isAddingComment || (!newComment.trim() && commentFiles.length === 0)}
-                  className={`px-6 py-2 rounded-xl ${(newComment.trim() || commentFiles.length > 0) ? 'bg-yellow-400' : 'bg-gray-200'}`}
-                >
-                  {isAddingComment ? (
-                    <ActivityIndicator size="small" color="white" />
-                  ) : (
-                    <Text className={`font-semibold ${(newComment.trim() || commentFiles.length > 0) ? 'text-white' : 'text-gray-400'}`}>
-                      Post
-                    </Text>
-                  )}
-                </TouchableOpacity>
+
+                {submissionFiles.length > 0 && (
+                  <View className="mt-3">
+                    {submissionFiles.map((file, index) => (
+                      <View key={index} className="flex-row items-center justify-between bg-gray-50 rounded-lg p-2 mb-1">
+                        <View className="flex-row items-center flex-1">
+                          <Ionicons name="document-text" size={16} color="#EAB308" />
+                          <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
+                            {file.name}
+                          </Text>
+                        </View>
+                        <TouchableOpacity onPress={() => setSubmissionFiles(submissionFiles.filter((_, i) => i !== index))}>
+                          <Ionicons name="close-circle" size={18} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </View>
-            </View>
+
+              <View className="mb-4">
+                <View className="flex-row justify-between items-center mb-2">
+                  <Text className="text-sm font-semibold text-gray-700">Photos (Optional)</Text>
+                  <Text className="text-xs text-gray-500">{submissionPhotos.length} selected</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      const result = await DocumentPicker.getDocumentAsync({
+                        multiple: true,
+                        type: 'image/*',
+                      });
+
+                      if (result.assets && result.assets.length > 0) {
+                        const newPhotos = result.assets.map((asset) => ({
+                          name: asset.name,
+                          uri: asset.uri,
+                        }));
+                        setSubmissionPhotos([...submissionPhotos, ...newPhotos]);
+                      }
+                    } catch (error) {
+                      console.error('Error picking photos:', error);
+                    }
+                  }}
+                  className="border-2 border-dashed border-gray-300 rounded-lg p-4 items-center"
+                >
+                  <Ionicons name="image" size={24} color="#9CA3AF" />
+                  <Text className="text-gray-600 mt-2 text-sm">Tap to add photos</Text>
+                </TouchableOpacity>
+
+                {submissionPhotos.length > 0 && (
+                  <View className="mt-3">
+                    {submissionPhotos.map((photo, index) => (
+                      <View key={index} className="flex-row items-center justify-between bg-gray-50 rounded-lg p-2 mb-1">
+                        <View className="flex-row items-center flex-1">
+                          <Ionicons name="image" size={16} color="#EAB308" />
+                          <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
+                            {photo.name}
+                          </Text>
+                        </View>
+                        <TouchableOpacity onPress={() => setSubmissionPhotos(submissionPhotos.filter((_, i) => i !== index))}>
+                          <Ionicons name="close-circle" size={18} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              <TouchableOpacity
+                onPress={handleAddSubmission}
+                disabled={isAddingComment || !submissionNote.trim()}
+                className={`p-4 rounded-xl mb-4 ${submissionNote.trim() ? 'bg-yellow-400' : 'bg-gray-200'}`}
+              >
+                {isAddingComment ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <Text className={`text-center font-semibold ${submissionNote.trim() ? 'text-white' : 'text-gray-400'}`}>
+                    Submit Work
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
           </View>
         </View>
-      </ScrollView>
+      </Modal>
 
       {/* Edit Task Modal */}
       <Modal
@@ -1066,7 +1958,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              {/* Title Input */}
               <View className="mb-4">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">Title</Text>
                 <TextInput
@@ -1078,7 +1969,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 />
               </View>
 
-              {/* Description Input with @mention */}
               <View className="mb-4 relative">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">
                   Description (Use @ to mention team members)
@@ -1093,7 +1983,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                   placeholderTextColor="#9CA3AF"
                 />
                 
-                {/* Mention Suggestions Modal */}
                 {showMentions && members.length > 0 && (
                   <View className="absolute top-24 left-0 right-0 bg-white rounded-xl shadow-lg border border-gray-100 max-h-64 z-10">
                     <FlatList
@@ -1181,7 +2070,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 )}
               </View>
 
-              {/* File Upload */}
               <View className="mb-4">
                 <View className="flex-row justify-between items-center mb-2">
                   <Text className="text-sm font-semibold text-gray-700">
@@ -1246,7 +2134,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 )}
               </View>
 
-              {/* Priority */}
               <View className="mb-4">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">Priority</Text>
                 <TouchableOpacity
@@ -1265,7 +2152,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 </TouchableOpacity>
               </View>
 
-              {/* Deadline */}
               <View className="mb-4">
                 <Text className="text-sm font-semibold text-gray-700 mb-2">Deadline (Date & Time)</Text>
                 <TouchableOpacity
@@ -1289,7 +2175,6 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 </TouchableOpacity>
               </View>
 
-              {/* Action Buttons */}
               <View className="flex-row gap-3 mt-6">
                 <TouchableOpacity
                   onPress={() => setShowEditModal(false)}
@@ -1576,6 +2461,56 @@ const downloadFile = async (fileUrl: string, fileName: string) => {
                 className="flex-1 bg-yellow-400 rounded-lg py-3"
               >
                 <Text className="text-center text-white font-semibold">Confirm</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Task Completion Confirmation Modal */}
+      <Modal
+        visible={showCompleteConfirmModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowCompleteConfirmModal(false)}
+      >
+        <View className="flex-1 justify-center items-center bg-black/50">
+          <View className="bg-white rounded-2xl p-6 w-[85%]">
+            <View className="items-center mb-4">
+              <View className="bg-green-100 rounded-full p-4 mb-4">
+                <Ionicons name="checkmark-circle" size={40} color="#22C55E" />
+              </View>
+              <Text className="text-xl font-bold text-gray-800 text-center mb-2">
+                Complete Task?
+              </Text>
+              <Text className="text-base font-semibold text-gray-700 mb-1">
+                {task?.title}
+              </Text>
+            </View>
+
+            <View className="bg-green-50 rounded-lg p-3 mb-6">
+              <Text className="text-sm text-gray-700 text-center">
+                Are you sure you want to mark this task as complete? This action cannot be undone.
+              </Text>
+            </View>
+
+            <View className="flex-row justify-end gap-3">
+              <TouchableOpacity
+                onPress={() => setShowCompleteConfirmModal(false)}
+                className="px-5 py-2 rounded-lg border border-gray-300"
+              >
+                <Text className="text-gray-700 font-semibold">No, Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={toggleTaskComplete}
+                disabled={isMarkingComplete}
+                className={`px-5 py-2 rounded-lg ${isMarkingComplete ? 'bg-green-300' : 'bg-green-500'}`}
+              >
+                {isMarkingComplete ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text className="text-white font-semibold">Yes, Complete</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>

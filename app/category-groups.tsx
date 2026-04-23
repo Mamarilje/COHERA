@@ -173,7 +173,11 @@ export default function CategoryGroups() {
               >
                 <Image source={{ uri: group.icon }} className="w-12 h-12 mb-2" />
                 <Text className="font-semibold text-gray-800 text-center">{group.name}</Text>
-                <Text className="text-xs text-gray-400 mt-1">{group.taskCount} tasks</Text>
+                <View className="flex-row gap-2 mt-1">
+                  <Text className="text-xs text-gray-400">{group.taskCount} tasks</Text>
+                  <Text className="text-xs text-gray-400">•</Text>
+                  <Text className="text-xs text-gray-400">{group.members.length} member{group.members.length !== 1 ? 's' : ''}</Text>
+                </View>
                 {group.code && (
                   <Text className="text-xs text-gray-300 mt-1">Code: {group.code}</Text>
                 )}

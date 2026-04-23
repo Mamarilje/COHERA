@@ -22,6 +22,7 @@ import {
   limit 
 } from 'firebase/firestore';
 import { db } from '../../src/Firebase/firebaseConfig';
+import { checkAndNotifyDeadlines } from '../../src/utils/deadlineChecker';
 
 type Group = {
   id: string;
@@ -43,6 +44,7 @@ type Task = {
   groupId: string;
   completed: boolean;
   priority: string;
+  status?: 'todo' | 'in progress' | 'completed';
   createdAt: any;
 };
 
@@ -57,6 +59,7 @@ export default function Home() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [createdTodayTasks, setCreatedTodayTasks] = useState<Task[]>([]);
   const [dueTodayTasks, setDueTodayTasks] = useState<Task[]>([]);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
   const [taskStats, setTaskStats] = useState({
     todo: 0,
     inProgress: 0,
@@ -76,6 +79,14 @@ export default function Home() {
       default:
         return 'https://cdn-icons-png.flaticon.com/512/3135/3135755.png';
     }
+  };
+
+  const isOverdue = (deadline: string, completed: boolean) => {
+    if (completed) return false;
+    const taskDate = new Date(deadline);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return taskDate < today;
   };
 
   const fetchUserData = async () => {
@@ -164,8 +175,31 @@ export default function Home() {
         const tasksQuery = query(tasksRef, where('groupId', '==', groupId));
         const tasksSnapshot = await getDocs(tasksQuery);
         
-        tasksSnapshot.forEach((doc) => {
+        for (const doc of tasksSnapshot.docs) {
           const data = doc.data();
+          let taskStatus = data.status || 'todo';
+          
+          // Check if task has any submissions with 'Progress' status
+          try {
+            const submissionsRef = collection(db, 'submissions');
+            const submissionsQuery = query(submissionsRef, where('taskId', '==', doc.id));
+            const submissionsSnapshot = await getDocs(submissionsQuery);
+            
+            // Check if any submission has 'Progress' status
+            const hasProgressSubmission = submissionsSnapshot.docs.some(
+              (subDoc) => subDoc.data().status === 'Progress'
+            );
+            
+            if (hasProgressSubmission) {
+              taskStatus = 'in progress';
+            }
+          } catch (subError: any) {
+            // Skip submission check if there are permission issues
+            if (subError.code !== 'permission-denied') {
+              console.error('Error checking submissions:', subError);
+            }
+          }
+          
           allTasks.push({
             id: doc.id,
             title: data.title || '',
@@ -176,9 +210,10 @@ export default function Home() {
             groupId: groupId,
             completed: data.completed || false,
             priority: data.priority || 'Medium',
+            status: taskStatus,
             createdAt: data.createdAt,
           });
-        });
+        }
       }
       
       // Get today's date range (start to end of day)
@@ -206,15 +241,32 @@ export default function Home() {
       setCreatedTodayTasks(createdToday);
       setDueTodayTasks(dueToday);
       
-      // Calculate task statistics
-      const todo = allTasks.filter(task => !task.completed).length;
+      // Calculate task statistics - match task.tsx logic
+      const todo = allTasks.filter(task => !task.completed && !isOverdue(task.dueDate, task.completed)).length;
       const completed = allTasks.filter(task => task.completed).length;
-      const inProgress = 0; // You can add an 'inProgress' status to tasks if needed
+      const inProgress = allTasks.filter(task => task.status === 'in progress').length;
       
       setTaskStats({ todo, inProgress, completed });
       
     } catch (error) {
       console.error('Error fetching tasks:', error);
+    }
+  };
+
+  const fetchUnreadNotifications = async () => {
+    if (!user) return;
+
+    try {
+      const notificationsQuery = query(
+        collection(db, 'notifications'),
+        where('userId', '==', user.uid),
+        where('read', '==', false)
+      );
+
+      const snapshot = await getDocs(notificationsQuery);
+      setUnreadNotificationsCount(snapshot.size);
+    } catch (error) {
+      console.error('Error fetching unread notifications:', error);
     }
   };
 
@@ -224,6 +276,7 @@ export default function Home() {
       fetchUserData(),
       fetchGroups(),
       fetchTasks(),
+      fetchUnreadNotifications(),
     ]);
     setIsLoading(false);
     setRefreshing(false);
@@ -237,6 +290,8 @@ export default function Home() {
     useCallback(() => {
       if (user) {
         loadAllData();
+        // Check for deadline notifications whenever the home screen is focused
+        checkAndNotifyDeadlines();
       }
     }, [user])
   );
@@ -322,6 +377,13 @@ export default function Home() {
             className="relative"
           >
             <Ionicons name="notifications-outline" size={24} color="#666" />
+            {unreadNotificationsCount > 0 && (
+              <View className="absolute -top-2 -right-2 bg-red-500 rounded-full w-5 h-5 items-center justify-center">
+                <Text className="text-white text-xs font-bold">
+                  {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -332,7 +394,11 @@ export default function Home() {
         </Text>
 
         {/* TASK OVERVIEW CARD */}
-        <View className="bg-yellow-400 rounded-2xl p-5 mb-6 shadow-sm">
+        <TouchableOpacity 
+          onPress={() => router.push('/(tabs)/task' as any)}
+          className="bg-yellow-400 rounded-2xl p-5 mb-6 shadow-sm"
+          activeOpacity={0.9}
+        >
           <View className="flex-row items-center mb-4">
             <Ionicons name="folder-outline" size={18} color="white" />
             <Text className="text-white ml-2 font-semibold text-base">Task Overview</Text>
@@ -351,7 +417,7 @@ export default function Home() {
               <Text className="text-white text-xs font-medium">Completed</Text>
             </View>
           </View>
-        </View>
+        </TouchableOpacity>
 
         {/* MY GROUPS BY CATEGORY SECTION */}
         <View className="flex-row justify-between items-center mb-4">
@@ -523,24 +589,6 @@ export default function Home() {
               <Text className="text-gray-400 text-sm">No tasks due today</Text>
             </View>
           )}
-        </View>
-
-        {/* Quick Actions */}
-        <View className="flex-row justify-between mt-2">
-          <TouchableOpacity 
-            onPress={() => router.push('/(tabs)/task')}
-            className="flex-1 bg-white rounded-xl p-4 mr-2 items-center shadow-sm"
-          >
-            <Ionicons name="add-circle-outline" size={24} color="#EAB308" />
-            <Text className="text-gray-600 text-sm mt-1">New Task</Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            onPress={() => router.push('/create-group' as any)}
-            className="flex-1 bg-white rounded-xl p-4 ml-2 items-center shadow-sm"
-          >
-            <Ionicons name="people-outline" size={24} color="#EAB308" />
-            <Text className="text-gray-600 text-sm mt-1">New Group</Text>
-          </TouchableOpacity>
         </View>
       </View>
     </ScrollView>

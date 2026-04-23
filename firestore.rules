@@ -1,49 +1,90 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(userId) {
+      return request.auth.uid == userId;
+    }
+
+    function isCreator(creatorField) {
+      return isAuthenticated() && request.auth.uid == resource.data[creatorField];
+    }
+
+    function isGroupCreator(groupId) {
+      return isAuthenticated() && 
+             request.auth.uid == get(/databases/$(database)/documents/groups/$(groupId)).data.createdBy;
+    }
+
     // User documents
     match /users/{userId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow read: if isAuthenticated();
+      allow write: if isUser(userId);
     }
 
     // Groups collection
     match /groups/{groupId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null && 
-                             request.auth.uid == resource.data.createdBy;
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isCreator('createdBy');
     }
 
-    // Tasks collection - Updated
+    // Tasks collection
     match /tasks/{taskId} {
-      allow read: if request.auth != null; // Allow authenticated users to read tasks
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null && 
-                              (request.auth.uid == resource.data.createdBy || resource.data.createdBy == null);
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && isGroupCreator(resource.data.groupId);
     }
 
-    // Task Comments - Updated
+    // Submissions collection
+    match /submissions/{submissionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && 
+                              (request.auth.uid == resource.data.userId || 
+                               request.auth.uid == get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.createdBy);
+    }
+
+    // Task Comments (taskComments collection)
     match /taskComments/{commentId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null && 
-                              (request.auth.uid == resource.data.userId || resource.data.userId == null);
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && 
+                              (isCreator('userId') || resource.data.userId == null);
+    }
+
+    // Comments collection
+    match /comments/{commentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && 
+                              (isCreator('userId') || resource.data.userId == null);
     }
 
     // Join requests
     match /joinRequests/{requestId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if request.auth != null;
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+    }
+
+    // Notifications collection
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && request.auth.uid == resource.data.userId;
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.userId;
+      allow delete: if isAuthenticated() && request.auth.uid == resource.data.userId;
     }
 
     // Profiles collection
     match /profiles/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if isUser(userId);
     }
 
-    // Default deny
+    // Default deny all other access
     match /{document=**} {
       allow read, write: if false;
     }
