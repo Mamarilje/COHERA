@@ -1,10 +1,11 @@
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput, Modal, FlatList } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useState, useEffect, useCallback } from "react";
-import { collection, query, getDocs, where, updateDoc, deleteDoc, doc, and, getDoc } from "firebase/firestore";
+import { useState, useCallback, useRef } from "react";
+import { collection, query, getDocs, where, updateDoc, doc } from "firebase/firestore";
 import { db } from "../../src/Firebase/firebaseConfig";
 import { getAuth } from "firebase/auth";
 import { useFocusEffect, useRouter } from "expo-router";
+import { useAppTheme } from "../../src/theme/AppThemeContext";
 
 interface Task {
   id: string;
@@ -26,6 +27,23 @@ interface Group {
   id: string;
   name: string;
 }
+
+type TaskStatus = NonNullable<Task['status']>;
+
+const FIRESTORE_IN_QUERY_LIMIT = 10;
+
+const chunkArray = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
+};
+
+const isTaskCompleted = (task: Task) =>
+  task.completed || Boolean(task.completedBy && task.completedBy.length > 0);
 
 const getPriorityStyles = (priority: string) => {
   switch (priority) {
@@ -59,9 +77,11 @@ const getPriorityStyles = (priority: string) => {
 export default function Tasks() {
   const auth = getAuth();
   const router = useRouter();
+  const { colors, isDark } = useAppTheme();
   const currentUser = auth.currentUser;
+  const hasLoadedOnceRef = useRef(false);
+  const isLoadingRef = useRef(false);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [groups, setGroups] = useState<Map<string, string>>(new Map());
   const [groupsList, setGroupsList] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeStatus, setActiveStatus] = useState<'all' | 'todo' | 'inprogress' | 'completed' | 'overdue' | 'notcomplete' | 'archive'>('all');
@@ -71,8 +91,8 @@ export default function Tasks() {
   const [showGroupFilter, setShowGroupFilter] = useState(false);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
 
-  const fetchUnreadNotifications = async () => {
-    if (!currentUser) return;
+  const fetchUnreadNotifications = useCallback(async () => {
+    if (!currentUser) return 0;
 
     try {
       const notificationsQuery = query(
@@ -82,28 +102,14 @@ export default function Tasks() {
       );
 
       const snapshot = await getDocs(notificationsQuery);
-      setUnreadNotificationsCount(snapshot.size);
+      return snapshot.size;
     } catch (error) {
       console.error('Error fetching unread notifications:', error);
+      return 0;
     }
-  };
+  }, [currentUser]);
 
-  const loadAllData = async () => {
-    await Promise.all([
-      fetchAllTasks(),
-      fetchUnreadNotifications(),
-    ]);
-  };
-
-  useFocusEffect(
-    useCallback(() => {
-      if (currentUser) {
-        loadAllData();
-      }
-    }, [currentUser])
-  );
-
-  const fetchUserGroups = async () => {
+  const fetchUserGroups = useCallback(async () => {
     if (!currentUser) return { groupsMap: new Map(), groupsList: [] };
     
     try {
@@ -118,121 +124,155 @@ export default function Tasks() {
         groupsArray.push({ id: doc.id, name: doc.data().name });
       });
       
-      setGroups(groupsMap);
       setGroupsList(groupsArray);
       return { groupsMap, groupsList: groupsArray };
     } catch (error) {
       console.error('Error fetching groups:', error);
       return { groupsMap: new Map(), groupsList: [] };
     }
-  };
+  }, [currentUser]);
 
-  const fetchAllTasks = async () => {
+  const fetchAllTasks = useCallback(async ({ showSpinner = true } = {}) => {
+    if (!currentUser) {
+      setTasks([]);
+      setGroupsList([]);
+      setLoading(false);
+      hasLoadedOnceRef.current = false;
+      return;
+    }
+
+    if (isLoadingRef.current) {
+      return;
+    }
+
     try {
-      setLoading(true);
+      isLoadingRef.current = true;
+      if (showSpinner) {
+        setLoading(true);
+      }
       
-      // First get user's groups
-      const { groupsMap, groupsList } = await fetchUserGroups();
+      const { groupsMap } = await fetchUserGroups();
       const userGroupIds = Array.from(groupsMap.keys());
       
       if (userGroupIds.length === 0) {
         setTasks([]);
-        setLoading(false);
+        hasLoadedOnceRef.current = true;
         return;
       }
       
-      // Fetch tasks from user's groups only
       const tasksRef = collection(db, 'tasks');
-      const fetchedTasks: Task[] = [];
-      
-      for (const groupId of userGroupIds) {
-        const tasksQuery = query(tasksRef, where('groupId', '==', groupId));
-        const tasksSnapshot = await getDocs(tasksQuery);
-        
-        for (const taskDoc of tasksSnapshot.docs) {
+      const taskSnapshots = await Promise.all(
+        chunkArray(userGroupIds, FIRESTORE_IN_QUERY_LIMIT).map((groupIdChunk) =>
+          getDocs(query(tasksRef, where('groupId', 'in', groupIdChunk)))
+        )
+      );
+
+      const fetchedTasks: Task[] = taskSnapshots.flatMap((tasksSnapshot) =>
+        tasksSnapshot.docs.map((taskDoc) => {
           const data = taskDoc.data();
-          let taskStatus = data.status || 'todo';
-          
-          // Check if task is completed (either globally or by members)
-          if (data.completed || (data.completedBy && data.completedBy.length > 0)) {
-            taskStatus = 'completed';
-          } else {
-            // Check if task has any submissions with 'Progress' status
-            try {
-              const submissionsRef = collection(db, 'submissions');
-              const submissionsQuery = query(submissionsRef, where('taskId', '==', taskDoc.id));
-              const submissionsSnapshot = await getDocs(submissionsQuery);
-              
-              // Check if any submission has 'Progress' status
-              const hasProgressSubmission = submissionsSnapshot.docs.some(
-                (subDoc) => subDoc.data().status === 'Progress'
-              );
-              
-              if (hasProgressSubmission) {
-                taskStatus = 'in progress';
-              }
-            } catch (subError: any) {
-              // Skip submission check if there are permission issues
-              if (subError.code !== 'permission-denied') {
-                console.error('Error checking submissions:', subError);
-              }
-            }
-          }
-          
-          fetchedTasks.push({
+
+          return {
             id: taskDoc.id,
             title: data.title || '',
             description: data.description || '',
             deadline: data.deadline || '',
             priority: data.priority || 'Medium',
-            completed: data.completed || false,
-            status: taskStatus,
-            groupId: groupId,
-            groupName: groupsMap.get(groupId) || 'Unknown Group',
+            completed: Boolean(data.completed),
+            status: (data.status || 'todo') as TaskStatus,
+            groupId: data.groupId || '',
+            groupName: groupsMap.get(data.groupId || '') || 'Unknown Group',
             createdBy: data.createdBy || '',
             createdAt: data.createdAt,
             completedBy: data.completedBy || [],
             archived: data.archived || false,
+          };
+        })
+      );
+
+      const incompleteTaskIds = fetchedTasks
+        .filter((task) => !task.completed && !(task.completedBy && task.completedBy.length > 0))
+        .map((task) => task.id);
+
+      const progressTaskIds = new Set<string>();
+
+      if (incompleteTaskIds.length > 0) {
+        try {
+          const submissionsRef = collection(db, 'submissions');
+          const submissionSnapshots = await Promise.all(
+            chunkArray(incompleteTaskIds, FIRESTORE_IN_QUERY_LIMIT).map((taskIdChunk) =>
+              getDocs(query(submissionsRef, where('taskId', 'in', taskIdChunk)))
+            )
+          );
+
+          submissionSnapshots.forEach((snapshot) => {
+            snapshot.docs.forEach((submissionDoc) => {
+              const submission = submissionDoc.data();
+
+              if (submission.status === 'Progress' && submission.taskId) {
+                progressTaskIds.add(submission.taskId);
+              }
+            });
           });
+        } catch (subError: any) {
+          if (subError.code !== 'permission-denied') {
+            console.error('Error checking submissions:', subError);
+          }
         }
       }
+
+      const normalizedTasks = fetchedTasks.map((task) => {
+        if (task.completed || (task.completedBy && task.completedBy.length > 0)) {
+          return { ...task, status: 'completed' as TaskStatus };
+        }
+
+        if (progressTaskIds.has(task.id)) {
+          return { ...task, status: 'in progress' as TaskStatus };
+        }
+
+        return task;
+      });
       
-      // Sort tasks by deadline (earliest first)
-      fetchedTasks.sort((a, b) => {
+      normalizedTasks.sort((a, b) => {
         return new Date(a.deadline).getTime() - new Date(b.deadline).getTime();
       });
       
-      setTasks(fetchedTasks);
+      setTasks(normalizedTasks);
+      hasLoadedOnceRef.current = true;
     } catch (error) {
       console.error('Error fetching tasks:', error);
       Alert.alert('Error', 'Failed to load tasks');
     } finally {
       setLoading(false);
+      isLoadingRef.current = false;
     }
-  };
+  }, [currentUser, fetchUserGroups]);
 
-  const fetchAllData = async () => {
-    await fetchAllTasks();
-  };
-
-  const toggleTaskComplete = async (taskId: string, currentStatus: boolean) => {
-    try {
-      await updateDoc(doc(db, 'tasks', taskId), {
-        completed: !currentStatus,
-      });
-      fetchAllTasks();
-    } catch (error) {
-      console.error('Error updating task:', error);
-      Alert.alert('Error', 'Failed to update task');
+  const loadAllData = useCallback(async ({ showSpinner = true } = {}) => {
+    if (!currentUser) {
+      return;
     }
-  };
+
+    const unreadCount = await fetchUnreadNotifications();
+    setUnreadNotificationsCount(unreadCount);
+    await fetchAllTasks({ showSpinner });
+  }, [currentUser, fetchAllTasks, fetchUnreadNotifications]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!currentUser) {
+        return;
+      }
+
+      loadAllData({ showSpinner: !hasLoadedOnceRef.current });
+    }, [currentUser, loadAllData])
+  );
 
   const archiveTask = async (taskId: string) => {
     try {
       await updateDoc(doc(db, 'tasks', taskId), {
         archived: true,
       });
-      fetchAllTasks();
+      loadAllData({ showSpinner: false });
       Alert.alert('Success', 'Task archived');
     } catch (error) {
       console.error('Error archiving task:', error);
@@ -266,6 +306,8 @@ export default function Tasks() {
     return taskDate < today;
   };
 
+  const isTaskOverdue = (task: Task) => isOverdue(task.deadline, isTaskCompleted(task));
+
   // Filter tasks by group first
   const groupFilteredTasks = selectedGroupFilter !== 'all' 
     ? tasks.filter(task => task.groupId === selectedGroupFilter)
@@ -273,11 +315,11 @@ export default function Tasks() {
 
   const statusCounts = {
     all: groupFilteredTasks.filter(task => !task.archived).length,
-    todo: groupFilteredTasks.filter(task => !task.completed && !isOverdue(task.deadline, task.completed) && !task.archived).length,
-    inprogress: groupFilteredTasks.filter(task => task.status === 'in progress' && !task.archived).length,
-    completed: groupFilteredTasks.filter(task => (task.completed || (task.completedBy && task.completedBy.length > 0)) && !task.archived).length,
-    overdue: groupFilteredTasks.filter(task => !task.completed && isOverdue(task.deadline, task.completed) && !task.archived).length,
-    notcomplete: groupFilteredTasks.filter(task => !task.completed && !task.archived).length,
+    todo: groupFilteredTasks.filter(task => !isTaskCompleted(task) && task.status !== 'in progress' && !isTaskOverdue(task) && !task.archived).length,
+    inprogress: groupFilteredTasks.filter(task => task.status === 'in progress' && !isTaskCompleted(task) && !task.archived).length,
+    completed: groupFilteredTasks.filter(task => isTaskCompleted(task) && !task.archived).length,
+    overdue: groupFilteredTasks.filter(task => !isTaskCompleted(task) && isTaskOverdue(task) && !task.archived).length,
+    notcomplete: groupFilteredTasks.filter(task => !isTaskCompleted(task) && !task.archived).length,
     archive: groupFilteredTasks.filter(task => task.archived).length,
   };
 
@@ -293,19 +335,19 @@ export default function Tasks() {
     if (activeStatus !== 'all') {
       switch (activeStatus) {
         case 'todo':
-          filtered = filtered.filter(task => !task.completed && !isOverdue(task.deadline, task.completed) && !task.archived);
+          filtered = filtered.filter(task => !isTaskCompleted(task) && task.status !== 'in progress' && !isTaskOverdue(task) && !task.archived);
           break;
         case 'inprogress':
-          filtered = filtered.filter(task => task.status === 'in progress' && !task.completed && !task.archived);
+          filtered = filtered.filter(task => task.status === 'in progress' && !isTaskCompleted(task) && !task.archived);
           break;
         case 'completed':
-          filtered = filtered.filter(task => (task.completed || (task.completedBy && task.completedBy.length > 0)) && !task.archived);
+          filtered = filtered.filter(task => isTaskCompleted(task) && !task.archived);
           break;
         case 'overdue':
-          filtered = filtered.filter(task => !task.completed && isOverdue(task.deadline, task.completed) && !task.archived);
+          filtered = filtered.filter(task => !isTaskCompleted(task) && isTaskOverdue(task) && !task.archived);
           break;
         case 'notcomplete':
-          filtered = filtered.filter(task => !task.completed && !task.archived);
+          filtered = filtered.filter(task => !isTaskCompleted(task) && !task.archived);
           break;
         case 'archive':
           filtered = filtered.filter(task => task.archived);
@@ -341,7 +383,7 @@ export default function Tasks() {
     } else if (activeStatus === 'notcomplete') {
       // For 'Not Complete', show all incomplete tasks by deadline
       category = getDateCategory(task.deadline);
-    } else if (task.completed || (task.completedBy && task.completedBy.length > 0)) {
+    } else if (isTaskCompleted(task)) {
       category = 'Completed';
     } else {
       category = getDateCategory(task.deadline);
@@ -361,30 +403,32 @@ export default function Tasks() {
 
     return (
       <View className="mb-6" key={title}>
-        <Text className="text-sm font-medium text-gray-400 mb-3">
+        <Text className="text-sm font-medium mb-3" style={{ color: colors.textSoft }}>
           {title} • {sectionTasks.length} {sectionTasks.length === 1 ? 'task' : 'tasks'}
         </Text>
         
         {sectionTasks.map((task) => {
           const priorityStyles = getPriorityStyles(task.priority);
-          const isTaskCompleted = task.completed || (task.completedBy && task.completedBy.length > 0);
-          const isTaskOverdue = !isTaskCompleted && isOverdue(task.deadline, task.completed);
+          const taskIsCompleted = isTaskCompleted(task);
+          const taskIsOverdue = !taskIsCompleted && isTaskOverdue(task);
           
           return (
             <TouchableOpacity
               key={task.id}
               onPress={() => router.push(`/task/${task.id}`)}
-              className={`bg-white rounded-xl p-4 mb-3 border-l-4 ${priorityStyles.borderColor} shadow-sm ${
-                isTaskOverdue ? 'bg-red-50' : ''
-              }`}
+              className={`rounded-xl p-4 mb-3 border-l-4 ${priorityStyles.borderColor} shadow-sm`}
+              style={{ backgroundColor: taskIsOverdue && !isDark ? '#FEF2F2' : colors.surface }}
             >
               <View className="flex-row items-start">
                 <View className="flex-1">
                   <View className="flex-row items-center gap-2 mb-1">
-                    <Text className={`font-semibold text-base ${isTaskCompleted ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                    <Text
+                      className={`font-semibold text-base ${taskIsCompleted ? 'line-through' : ''}`}
+                      style={{ color: taskIsCompleted ? colors.textSoft : colors.text }}
+                    >
                       {task.title}
                     </Text>
-                    {isTaskCompleted && (
+                    {taskIsCompleted && (
                       <View className="bg-green-100 px-2 py-0.5 rounded">
                         <Ionicons name="checkmark-circle" size={14} color="#22C55E" />
                       </View>
@@ -392,21 +436,21 @@ export default function Tasks() {
                   </View>
                   
                   <View className="flex-row items-center mt-1">
-                    <Ionicons name="calendar-outline" size={12} color="#9CA3AF" />
-                    <Text className="text-xs text-gray-500 ml-1">
+                    <Ionicons name="calendar-outline" size={12} color={colors.textSoft} />
+                    <Text className="text-xs ml-1" style={{ color: colors.textMuted }}>
                       Due: {new Date(task.deadline).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                     </Text>
                   </View>
                   
                   <View className="flex-row items-center mt-1">
-                    <Ionicons name="folder-outline" size={12} color="#9CA3AF" />
-                    <Text className="text-xs text-gray-500 ml-1">
+                    <Ionicons name="folder-outline" size={12} color={colors.textSoft} />
+                    <Text className="text-xs ml-1" style={{ color: colors.textMuted }}>
                       Group: {task.groupName || 'Unknown'}
                     </Text>
                   </View>
                   
                   {task.description ? (
-                    <Text className="text-xs text-gray-400 mt-1" numberOfLines={1}>
+                    <Text className="text-xs mt-1" style={{ color: colors.textSoft }} numberOfLines={1}>
                       {task.description}
                     </Text>
                   ) : null}
@@ -431,7 +475,7 @@ export default function Tasks() {
                       ]);
                     }}
                   >
-                    <Ionicons name="archive-outline" size={20} color="#9CA3AF" />
+                    <Ionicons name="archive-outline" size={20} color={colors.textSoft} />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -444,14 +488,14 @@ export default function Tasks() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-gray-50 items-center justify-center">
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
         <ActivityIndicator size="large" color="#EAB308" />
       </View>
     );
   }
 
   return (
-    <ScrollView className="flex-1 bg-gray-50 px-5 pt-12" showsVerticalScrollIndicator={false}>
+    <ScrollView className="flex-1 px-5 pt-12" style={{ backgroundColor: colors.background }} showsVerticalScrollIndicator={false}>
       {/* HEADER */}
       <View className="flex-row justify-between items-center mb-6">
         <View className="flex-row items-center">
@@ -459,13 +503,13 @@ export default function Tasks() {
         </View>
         <View className="flex-row items-center gap-4">
           <TouchableOpacity onPress={() => setShowSearch(!showSearch)}>
-            <Ionicons name="search-outline" size={22} color="#666" />
+            <Ionicons name="search-outline" size={22} color={colors.icon} />
           </TouchableOpacity>
           <TouchableOpacity 
             onPress={() => router.push('/notifications' as any)}
             className="relative"
           >
-            <Ionicons name="notifications-outline" size={22} color="#666" />
+            <Ionicons name="notifications-outline" size={22} color={colors.icon} />
             {unreadNotificationsCount > 0 && (
               <View className="absolute -top-1 -right-1 bg-red-500 rounded-full w-5 h-5 items-center justify-center">
                 <Text className="text-white text-xs font-bold">
@@ -478,31 +522,32 @@ export default function Tasks() {
       </View>
 
       {/* PAGE TITLE */}
-      <Text className="text-3xl font-bold text-gray-900 mb-6">
+      <Text className="text-3xl font-bold mb-6" style={{ color: colors.text }}>
         My Tasks
       </Text>
 
       {/* SEARCH BAR */}
       {showSearch && (
         <View className="mb-4">
-          <View className="flex-row items-center bg-white rounded-xl px-4 py-2 shadow-sm border border-gray-100">
-            <Ionicons name="search-outline" size={20} color="#9CA3AF" />
+          <View className="flex-row items-center rounded-xl px-4 py-2 shadow-sm border" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
+            <Ionicons name="search-outline" size={20} color={colors.textSoft} />
             <TextInput
-              className="flex-1 ml-2 text-base text-gray-800 py-2"
+              className="flex-1 ml-2 text-base py-2"
+              style={{ color: colors.text }}
               placeholder="Search by title, description, or group..."
-              placeholderTextColor="#9CA3AF"
+              placeholderTextColor={colors.textSoft}
               value={searchQuery}
               onChangeText={setSearchQuery}
               autoFocus
             />
             {searchQuery.length > 0 && (
               <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Ionicons name="close-circle" size={20} color="#9CA3AF" />
+                <Ionicons name="close-circle" size={20} color={colors.textSoft} />
               </TouchableOpacity>
             )}
           </View>
           {searchQuery.length > 0 && (
-            <Text className="text-xs text-gray-400 mt-2 ml-2">
+            <Text className="text-xs mt-2 ml-2" style={{ color: colors.textSoft }}>
               Found {filteredTasks.length} result{filteredTasks.length !== 1 ? 's' : ''}
             </Text>
           )}
@@ -513,15 +558,16 @@ export default function Tasks() {
       <View className="mb-6">
         <TouchableOpacity 
           onPress={() => setShowGroupFilter(true)}
-          className="flex-row items-center justify-between bg-white rounded-xl px-4 py-3 shadow-sm border border-gray-100"
+          className="flex-row items-center justify-between rounded-xl px-4 py-3 shadow-sm border"
+          style={{ backgroundColor: colors.surface, borderColor: colors.border }}
         >
           <View className="flex-row items-center flex-1">
-            <Ionicons name="filter" size={18} color="#6B7280" />
-            <Text className="ml-2 text-gray-700 font-medium">
+            <Ionicons name="filter" size={18} color={colors.icon} />
+            <Text className="ml-2 font-medium" style={{ color: colors.text }}>
               {selectedGroupFilter === 'all' ? 'All Groups' : groupsList.find(g => g.id === selectedGroupFilter)?.name || 'Select Group'}
             </Text>
           </View>
-          <Ionicons name="chevron-down" size={18} color="#9CA3AF" />
+          <Ionicons name="chevron-down" size={18} color={colors.textSoft} />
         </TouchableOpacity>
       </View>
 

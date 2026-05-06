@@ -10,6 +10,7 @@ import {
     TextInput,
     View,
 } from "react-native";
+import { useAppTheme } from "../src/theme/AppThemeContext";
 
 // ─── EmailJS Config ───────────────────────────────────────────────────────────
 const EMAILJS_SERVICE_ID = "service_qtzyxgp"; // from EmailJS dashboard
@@ -63,6 +64,7 @@ type Step = "verify" | "otp" | "password" | "done";
 export default function ChangePassword() {
   const auth = getAuth();
   const user = auth.currentUser;
+  const { colors } = useAppTheme();
 
   const [step, setStep] = useState<Step>("verify");
   const [error, setError] = useState("");
@@ -170,12 +172,12 @@ export default function ChangePassword() {
   // ─── Step 1: Send verification email ──────────────────────────────────────
   if (step === "verify") {
     return (
-      <View className="flex-1 justify-center px-6 bg-white">
-        <Text className="text-3xl font-bold text-center mb-3">
+      <View className="flex-1 justify-center px-6" style={{ backgroundColor: colors.background }}>
+        <Text className="text-3xl font-bold text-center mb-3" style={{ color: colors.text }}>
           Change Password
         </Text>
-        <Text className="text-gray-500 text-center text-sm mb-10">
-          For your security, we'll first send a verification code to{"\n"}
+        <Text className="text-center text-sm mb-10" style={{ color: colors.textMuted }}>
+          For your security, we will first send a verification code to{"\n"}
           <Text className="text-indigo-500 font-semibold">
             {user?.email ?? "your email"}
           </Text>
@@ -200,7 +202,7 @@ export default function ChangePassword() {
         </Pressable>
 
         <Pressable onPress={() => router.back()} disabled={sending}>
-          <Text className="text-center text-gray-500">Cancel</Text>
+          <Text className="text-center" style={{ color: colors.textMuted }}>Cancel</Text>
         </Pressable>
       </View>
     );
@@ -209,13 +211,13 @@ export default function ChangePassword() {
   // ─── Step 2: Enter OTP ────────────────────────────────────────────────────
   if (step === "otp") {
     return (
-      <View className="flex-1 justify-center px-6 bg-white">
+      <View className="flex-1 justify-center px-6" style={{ backgroundColor: colors.background }}>
         <Text className="text-6xl text-center mb-6">📩</Text>
 
-        <Text className="text-3xl font-bold text-center mb-3">
+        <Text className="text-3xl font-bold text-center mb-3" style={{ color: colors.text }}>
           Enter the Code
         </Text>
-        <Text className="text-gray-500 text-center text-sm mb-8">
+        <Text className="text-center text-sm mb-8" style={{ color: colors.textMuted }}>
           A 6-digit code was sent to{"\n"}
           <Text className="text-indigo-500 font-semibold">{user?.email}</Text>
           {"\n"}Please also check your spam folder.
@@ -232,7 +234,9 @@ export default function ChangePassword() {
           keyboardType="number-pad"
           maxLength={6}
           editable={!verifying}
-          className="border p-4 rounded-xl border-gray-300 text-center text-xl tracking-widest mb-6"
+          className="border p-4 rounded-xl text-center text-xl tracking-widest mb-6"
+          style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+          placeholderTextColor={colors.textSoft}
         />
 
         <Pressable
@@ -273,8 +277,8 @@ export default function ChangePassword() {
           }}
           disabled={sending}
         >
-          <Text className="text-center text-gray-500 text-sm">
-            Didn't receive it?{" "}
+          <Text className="text-center text-sm" style={{ color: colors.textMuted }}>
+            Did not receive it?{" "}
             <Text className="text-indigo-500 font-medium">Resend code</Text>
           </Text>
         </Pressable>
@@ -285,11 +289,11 @@ export default function ChangePassword() {
   // ─── Step 3: New password form ────────────────────────────────────────────
   if (step === "password") {
     return (
-      <View className="flex-1 justify-center px-6 bg-white">
-        <Text className="text-3xl font-bold text-center mb-3">
+      <View className="flex-1 justify-center px-6" style={{ backgroundColor: colors.background }}>
+        <Text className="text-3xl font-bold text-center mb-3" style={{ color: colors.text }}>
           New Password
         </Text>
-        <Text className="text-gray-500 text-center text-sm mb-8">
+        <Text className="text-center text-sm mb-8" style={{ color: colors.textMuted }}>
           Choose a strong new password for your account.
         </Text>
 
@@ -304,7 +308,9 @@ export default function ChangePassword() {
           onChangeText={setNewPassword}
           editable={!saving}
           secureTextEntry
-          className="border p-4 rounded-xl border-gray-300"
+          className="border p-4 rounded-xl"
+          style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+          placeholderTextColor={colors.textSoft}
         />
         <View className="px-1 pt-1 mb-4">
           <CheckItem met={passwordLongEnough} label="At least 8 characters" />
@@ -334,7 +340,9 @@ export default function ChangePassword() {
           onChangeText={setConfirmPassword}
           editable={!saving}
           secureTextEntry
-          className="border p-4 rounded-xl border-gray-300"
+          className="border p-4 rounded-xl"
+          style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+          placeholderTextColor={colors.textSoft}
         />
         <View className="px-1 pt-1 mb-8">
           <CheckItem
@@ -365,7 +373,7 @@ export default function ChangePassword() {
         </Pressable>
 
         <Pressable onPress={() => router.back()} disabled={saving}>
-          <Text className="text-center text-gray-500">Cancel</Text>
+          <Text className="text-center" style={{ color: colors.textMuted }}>Cancel</Text>
         </Pressable>
       </View>
     );
@@ -373,13 +381,13 @@ export default function ChangePassword() {
 
   // ─── Step 4: Success ──────────────────────────────────────────────────────
   return (
-    <View className="flex-1 justify-center px-6 bg-white">
+    <View className="flex-1 justify-center px-6" style={{ backgroundColor: colors.background }}>
       <Text className="text-6xl text-center mb-6">🔐</Text>
 
-      <Text className="text-3xl font-bold text-center mb-3">
+      <Text className="text-3xl font-bold text-center mb-3" style={{ color: colors.text }}>
         Password Updated!
       </Text>
-      <Text className="text-gray-500 text-center text-sm mb-10">
+      <Text className="text-center text-sm mb-10" style={{ color: colors.textMuted }}>
         Your password has been changed successfully.{"\n"}
         Use your new password the next time you log in.
       </Text>

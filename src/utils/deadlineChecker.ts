@@ -4,8 +4,6 @@ import {
   query,
   where,
   getDocs,
-  doc,
-  getDoc,
 } from 'firebase/firestore';
 import {
   notifyAdminDeadlineOneDay,
@@ -16,11 +14,27 @@ import {
   shouldNotifyOneHourBefore,
 } from './notificationHelper';
 
+const DEADLINE_CHECK_COOLDOWN_MS = 10 * 60 * 1000;
+
+let lastDeadlineCheckAt = 0;
+let deadlineCheckInFlight: Promise<void> | null = null;
+
 /**
  * Check all tasks for upcoming deadlines and send notifications
  * This should be called periodically (e.g., when app loads or every few hours)
  */
 export const checkAndNotifyDeadlines = async () => {
+  const now = Date.now();
+
+  if (deadlineCheckInFlight) {
+    return deadlineCheckInFlight;
+  }
+
+  if (now - lastDeadlineCheckAt < DEADLINE_CHECK_COOLDOWN_MS) {
+    return;
+  }
+
+  deadlineCheckInFlight = (async () => {
   try {
     console.log('Checking for upcoming task deadlines...');
 
@@ -87,7 +101,13 @@ export const checkAndNotifyDeadlines = async () => {
     }
 
     console.log('Deadline notification check completed');
+    lastDeadlineCheckAt = Date.now();
   } catch (error) {
     console.error('Error checking deadline notifications:', error);
+  } finally {
+    deadlineCheckInFlight = null;
   }
+  })();
+
+  return deadlineCheckInFlight;
 };

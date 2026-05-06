@@ -13,6 +13,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { useAppTheme } from "../src/theme/AppThemeContext";
 
 type CheckItemProps = {
   met: boolean;
@@ -35,6 +36,7 @@ function CheckItem({ met, label }: CheckItemProps) {
 }
 
 export default function ForgotPassword() {
+  const { colors } = useAppTheme();
   const [step, setStep] = useState<"input" | "sent" | "reset" | "done">(
     "input",
   );
@@ -129,13 +131,13 @@ export default function ForgotPassword() {
   // ─── Step 1: Email Input ───────────────────────────────────────────────────
   if (step === "input") {
     return (
-      <View className="flex-1 justify-center px-6 bg-white">
+      <View className="flex-1 justify-center px-6" style={{ backgroundColor: colors.background }}>
         {/* Header */}
-        <Text className="text-3xl font-bold text-center mb-3">
+        <Text className="text-3xl font-bold text-center mb-3" style={{ color: colors.text }}>
           Forgot Password
         </Text>
-        <Text className="text-gray-500 text-center text-sm mb-10">
-          Enter the email address linked to your account and we'll send you a
+        <Text className="text-center text-sm mb-10" style={{ color: colors.textMuted }}>
+          Enter the email address linked to your account and we will send you a
           link to reset your password.
         </Text>
 
@@ -152,7 +154,9 @@ export default function ForgotPassword() {
           editable={!sending}
           autoCapitalize="none"
           keyboardType="email-address"
-          className="border p-4 rounded-xl border-gray-300"
+          className="border p-4 rounded-xl"
+          style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+          placeholderTextColor={colors.textSoft}
         />
         <View className="px-1 pt-1 mb-8">
           <CheckItem met={emailFilled} label="Email is filled in" />
@@ -185,7 +189,7 @@ export default function ForgotPassword() {
 
         {/* Back to login */}
         <Pressable onPress={() => router.back()} disabled={sending}>
-          <Text className="text-center text-gray-500">Back to Login</Text>
+          <Text className="text-center" style={{ color: colors.textMuted }}>Back to Login</Text>
         </Pressable>
       </View>
     );
@@ -194,20 +198,20 @@ export default function ForgotPassword() {
   // ─── Step 2: Confirmation ──────────────────────────────────────────────────
   if (step === "sent") {
     return (
-      <View className="flex-1 justify-center px-6 bg-white">
+      <View className="flex-1 justify-center px-6" style={{ backgroundColor: colors.background }}>
         <Text className="text-6xl text-center mb-6">📬</Text>
 
-        <Text className="text-3xl font-bold text-center mb-3">
+        <Text className="text-3xl font-bold text-center mb-3" style={{ color: colors.text }}>
           Check Your Email
         </Text>
 
-        <Text className="text-gray-500 text-center text-sm mb-2">
+        <Text className="text-center text-sm mb-2" style={{ color: colors.textMuted }}>
           If an account exists for
         </Text>
         <Text className="text-yellow-600 font-semibold text-center text-base mb-4">
           {email.trim()}
         </Text>
-        <Text className="text-gray-500 text-center text-sm mb-10">
+        <Text className="text-center text-sm mb-10" style={{ color: colors.textMuted }}>
           you will receive a password reset link shortly.{"\n"}
           Please also check your spam or junk folder.
         </Text>
@@ -224,8 +228,8 @@ export default function ForgotPassword() {
 
         {/* Resend option */}
         <Pressable onPress={() => setStep("input")}>
-          <Text className="text-center text-gray-500 text-sm">
-            Didn't receive it?{" "}
+          <Text className="text-center text-sm" style={{ color: colors.textMuted }}>
+            Did not receive it?{" "}
             <Text className="text-yellow-600 font-medium">Try again</Text>
           </Text>
         </Pressable>
@@ -238,11 +242,11 @@ export default function ForgotPassword() {
   // Trigger setStep("reset") and setOobCode(code) from your deep-link handler.
   if (step === "reset") {
     return (
-      <View className="flex-1 justify-center px-6 bg-white">
-        <Text className="text-3xl font-bold text-center mb-3">
+      <View className="flex-1 justify-center px-6" style={{ backgroundColor: colors.background }}>
+        <Text className="text-3xl font-bold text-center mb-3" style={{ color: colors.text }}>
           Set New Password
         </Text>
-        <Text className="text-gray-500 text-center text-sm mb-8">
+        <Text className="text-center text-sm mb-8" style={{ color: colors.textMuted }}>
           Choose a strong new password for your account.
         </Text>
 
@@ -258,7 +262,9 @@ export default function ForgotPassword() {
           onChangeText={setNewPassword}
           editable={!resetting}
           secureTextEntry
-          className="border p-4 rounded-xl border-gray-300"
+          className="border p-4 rounded-xl"
+          style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+          placeholderTextColor={colors.textSoft}
         />
         <View className="px-1 pt-1 mb-4">
           <CheckItem met={passwordLongEnough} label="At least 8 characters" />
@@ -288,7 +294,9 @@ export default function ForgotPassword() {
           onChangeText={setConfirmPassword}
           editable={!resetting}
           secureTextEntry
-          className="border p-4 rounded-xl border-gray-300"
+          className="border p-4 rounded-xl"
+          style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+          placeholderTextColor={colors.textSoft}
         />
         <View className="px-1 pt-1 mb-8">
           <CheckItem
@@ -323,7 +331,7 @@ export default function ForgotPassword() {
           onPress={() => router.replace("./login")}
           disabled={resetting}
         >
-          <Text className="text-center text-gray-500">Back to Login</Text>
+          <Text className="text-center" style={{ color: colors.textMuted }}>Back to Login</Text>
         </Pressable>
       </View>
     );
@@ -331,13 +339,13 @@ export default function ForgotPassword() {
 
   // ─── Step 4: Success ───────────────────────────────────────────────────────
   return (
-    <View className="flex-1 justify-center px-6 bg-white">
+    <View className="flex-1 justify-center px-6" style={{ backgroundColor: colors.background }}>
       <Text className="text-6xl text-center mb-6">✅</Text>
 
-      <Text className="text-3xl font-bold text-center mb-3">
+      <Text className="text-3xl font-bold text-center mb-3" style={{ color: colors.text }}>
         Password Reset!
       </Text>
-      <Text className="text-gray-500 text-center text-sm mb-10">
+      <Text className="text-center text-sm mb-10" style={{ color: colors.textMuted }}>
         Your password has been successfully updated.{"\n"}
         You can now log in with your new password.
       </Text>

@@ -13,6 +13,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { getAuth } from 'firebase/auth';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../src/Firebase/firebaseConfig';
+import { useAppTheme } from '../src/theme/AppThemeContext';
 
 type Group = {
   id: string;
@@ -28,6 +29,7 @@ export default function CategoryGroups() {
   const router = useRouter();
   const { category } = useLocalSearchParams();
   const auth = getAuth();
+  const { colors, isDark } = useAppTheme();
   const user = auth.currentUser;
 
   const [groups, setGroups] = useState<Group[]>([]);
@@ -124,7 +126,7 @@ export default function CategoryGroups() {
 
   if (isLoading) {
     return (
-      <View className="flex-1 bg-white items-center justify-center">
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
         <ActivityIndicator size="large" color="#EAB308" />
       </View>
     );
@@ -132,7 +134,8 @@ export default function CategoryGroups() {
 
   return (
     <ScrollView
-      className="flex-1 bg-white"
+      className="flex-1"
+      style={{ backgroundColor: colors.background }}
       showsVerticalScrollIndicator={false}
       refreshControl={
         <RefreshControl
@@ -146,17 +149,17 @@ export default function CategoryGroups() {
         {/* HEADER */}
         <View className="flex-row items-center mb-6">
           <TouchableOpacity onPress={() => router.back()} className="mr-4">
-            <Ionicons name="arrow-back" size={24} color="#333" />
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
           <View className="flex-1">
-            <Text className="text-3xl font-bold text-gray-800 capitalize">
+            <Text className="text-3xl font-bold capitalize" style={{ color: colors.text }}>
               {category} Groups
             </Text>
-            <Text className="text-gray-500 text-sm mt-1">
+            <Text className="text-sm mt-1" style={{ color: colors.textMuted }}>
               {groups.length} group{groups.length !== 1 ? 's' : ''} • {groups.reduce((total, g) => total + g.taskCount, 0)} total tasks
             </Text>
           </View>
-          <View className="bg-yellow-100 rounded-full p-2">
+          <View className="rounded-full p-2" style={{ backgroundColor: isDark ? colors.accentSoft : '#FEF3C7' }}>
             <Ionicons name={getCategoryIcon(category as string) as any} size={28} color="#EAB308" />
           </View>
         </View>
@@ -168,29 +171,30 @@ export default function CategoryGroups() {
               <TouchableOpacity
                 key={group.id}
                 onPress={() => handleGroupPress(group.id, group.name)}
-                className="bg-white rounded-xl border border-yellow-200 w-[48%] p-4 items-center mb-4 shadow-sm"
+                className="rounded-xl border w-[48%] p-4 items-center mb-4 shadow-sm"
+                style={{ backgroundColor: colors.surface, borderColor: isDark ? colors.border : '#FDE68A' }}
                 activeOpacity={0.8}
               >
                 <Image source={{ uri: group.icon }} className="w-12 h-12 mb-2" />
-                <Text className="font-semibold text-gray-800 text-center">{group.name}</Text>
+                <Text className="font-semibold text-center" style={{ color: colors.text }}>{group.name}</Text>
                 <View className="flex-row gap-2 mt-1">
-                  <Text className="text-xs text-gray-400">{group.taskCount} tasks</Text>
+                  <Text className="text-xs" style={{ color: colors.textSoft }}>{group.taskCount} tasks</Text>
                   <Text className="text-xs text-gray-400">•</Text>
-                  <Text className="text-xs text-gray-400">{group.members.length} member{group.members.length !== 1 ? 's' : ''}</Text>
+                  <Text className="text-xs" style={{ color: colors.textSoft }}>{group.members.length} member{group.members.length !== 1 ? 's' : ''}</Text>
                 </View>
                 {group.code && (
-                  <Text className="text-xs text-gray-300 mt-1">Code: {group.code}</Text>
+                  <Text className="text-xs mt-1" style={{ color: colors.textMuted }}>Code: {group.code}</Text>
                 )}
               </TouchableOpacity>
             ))}
           </View>
         ) : (
-          <View className="bg-white rounded-xl p-8 items-center">
-            <Ionicons name="people-outline" size={48} color="#D1D5DB" />
-            <Text className="text-gray-400 text-center mt-3 capitalize">
+          <View className="rounded-xl p-8 items-center" style={{ backgroundColor: colors.surface }}>
+            <Ionicons name="people-outline" size={48} color={colors.textSoft} />
+            <Text className="text-center mt-3 capitalize" style={{ color: colors.textSoft }}>
               No {category} groups yet
             </Text>
-            <Text className="text-gray-300 text-xs text-center mt-1">
+            <Text className="text-xs text-center mt-1" style={{ color: colors.textMuted }}>
               Create a new group to get started
             </Text>
           </View>

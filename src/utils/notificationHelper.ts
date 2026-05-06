@@ -19,7 +19,8 @@ export type NotificationType =
   | 'task_assigned_to_you'
   | 'work_reviewed'
   | 'join_request_declined'
-  | 'kicked_from_group';
+  | 'kicked_from_group'
+  | 'promoted_to_admin';
 
 interface NotificationData {
   userId: string; // Recipient
@@ -282,6 +283,27 @@ export const notifyMemberKickedFromGroup = async (
     type: 'kicked_from_group',
     title: '❌ Removed from Group',
     message: `${adminName} removed you from "${groupName}"`,
+    groupId,
+    relatedUserId: adminId,
+    relatedUserName: adminName,
+  });
+};
+
+/**
+ * Notify member when they are promoted to admin
+ */
+export const notifyMemberPromotedToAdmin = async (
+  memberId: string,
+  groupName: string,
+  groupId: string,
+  adminName: string,
+  adminId: string
+) => {
+  await createNotification({
+    userId: memberId,
+    type: 'promoted_to_admin',
+    title: 'Promoted to Admin',
+    message: `${adminName} promoted you to admin in "${groupName}"`,
     groupId,
     relatedUserId: adminId,
     relatedUserName: adminName,

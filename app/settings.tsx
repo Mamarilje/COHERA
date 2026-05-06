@@ -19,10 +19,12 @@ import {
 import { db } from "../src/Firebase/firebaseConfig";
 import { supabase } from "../src/Supabase/supabaseConfig";
 import { uploadProfilePhoto } from "../src/lib/supabaseStorage";
+import { useAppTheme } from "../src/theme/AppThemeContext";
 
 export default function Settings() {
   const router = useRouter();
   const auth = getAuth();
+  const { colors } = useAppTheme();
   const [currentUser, setCurrentUser] = useState(auth.currentUser);
   const [showEditModal, setShowEditModal] = useState(false);
   const [userName, setUserName] = useState("");
@@ -644,25 +646,28 @@ export default function Settings() {
 
   if (isLoading) {
     return (
-      <View className="flex-1 bg-[#F5F7FA] items-center justify-center">
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
         <ActivityIndicator size="large" color="#6366F1" />
       </View>
     );
   }
 
   return (
-    <View className="flex-1 bg-[#F5F7FA]">
+    <View className="flex-1" style={{ backgroundColor: colors.background }}>
       {/* Header */}
-      <View className="bg-white px-5 pt-12 pb-4 flex-row items-center border-b border-gray-100">
+      <View
+        className="px-5 pt-12 pb-4 flex-row items-center"
+        style={{ backgroundColor: colors.surface, borderBottomColor: colors.border, borderBottomWidth: 1 }}
+      >
         <TouchableOpacity
           onPress={() => router.replace("/profile")}
           className="mr-4"
           accessibilityRole="button"
           accessibilityLabel="Go back to Profile"
         >
-          <Ionicons name="arrow-back" size={24} color="#1F2937" />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
-        <Text className="text-xl font-semibold text-gray-800">Settings</Text>
+        <Text className="text-xl font-semibold" style={{ color: colors.text }}>Settings</Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} className="flex-1">
@@ -676,7 +681,8 @@ export default function Settings() {
               setEditName(false);
               setShowEditModal(true);
             }}
-            className="bg-white rounded-xl p-4 flex-row items-center shadow-sm border border-gray-100 mb-4"
+            className="rounded-xl p-4 flex-row items-center shadow-sm border mb-4"
+            style={{ backgroundColor: colors.surface, borderColor: colors.border }}
           >
             {profileImage ? (
               <Image
@@ -684,58 +690,53 @@ export default function Settings() {
                 className="w-14 h-14 rounded-full mr-3"
               />
             ) : (
-              <View className="w-14 h-14 rounded-full bg-gray-100 items-center justify-center mr-3">
+              <View className="w-14 h-14 rounded-full items-center justify-center mr-3" style={{ backgroundColor: colors.surfaceMuted }}>
                 <Ionicons name="person-outline" size={32} color="#9CA3AF" />
               </View>
             )}
             <View className="flex-1">
-              <Text className="font-semibold text-gray-800 text-base">
+              <Text className="font-semibold text-base" style={{ color: colors.text }}>
                 {userName || "User"}
               </Text>
-              <Text className="text-gray-500 text-sm">
+              <Text className="text-sm" style={{ color: colors.textMuted }}>
                 {userTitle || "No title"}
               </Text>
               <Text className="text-indigo-500 text-xs mt-1">Edit profile</Text>
             </View>
-            <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+            <Ionicons name="chevron-forward" size={20} color={colors.textSoft} />
           </TouchableOpacity>
         </View>
 
         {/* Preferences Section */}
         <View className="px-5 mt-2">
-          <Text className="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-3 px-1">
+          <Text className="text-xs font-semibold uppercase tracking-wide mb-3 px-1" style={{ color: colors.textSoft }}>
             Preferences
           </Text>
 
-          <View className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100 mb-4">
-            <TouchableOpacity className="flex-row items-center justify-between p-4 border-b border-gray-100">
+          <View
+            className="rounded-xl overflow-hidden shadow-sm border mb-4"
+            style={{ backgroundColor: colors.surface, borderColor: colors.border }}
+          >
+            <TouchableOpacity className="flex-row items-center justify-between p-4" style={{ borderBottomColor: colors.border, borderBottomWidth: 1 }}>
               <View className="flex-row items-center">
                 <Ionicons
                   name="notifications-outline"
                   size={22}
                   color="#4B7BEC"
                 />
-                <Text className="text-gray-700 ml-3">Notifications</Text>
+                <Text className="ml-3" style={{ color: colors.text }}>Notifications</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
-            </TouchableOpacity>
-
-            <TouchableOpacity className="flex-row items-center justify-between p-4 border-b border-gray-100">
-              <View className="flex-row items-center">
-                <Ionicons name="moon-outline" size={22} color="#4B7BEC" />
-                <Text className="text-gray-700 ml-3">Dark Mode</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+              <Ionicons name="chevron-forward" size={20} color={colors.textSoft} />
             </TouchableOpacity>
 
             <TouchableOpacity className="flex-row items-center justify-between p-4">
               <View className="flex-row items-center">
                 <Ionicons name="language-outline" size={22} color="#4B7BEC" />
-                <Text className="text-gray-700 ml-3">Language</Text>
+                <Text className="ml-3" style={{ color: colors.text }}>Language</Text>
               </View>
               <View className="flex-row items-center">
-                <Text className="text-gray-400 text-sm mr-2">English</Text>
-                <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+                <Text className="text-sm mr-2" style={{ color: colors.textSoft }}>English</Text>
+                <Ionicons name="chevron-forward" size={20} color={colors.textSoft} />
               </View>
             </TouchableOpacity>
           </View>
@@ -743,43 +744,47 @@ export default function Settings() {
 
         {/* Account Section */}
         <View className="px-5 mt-2">
-          <Text className="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-3 px-1">
+          <Text className="text-xs font-semibold uppercase tracking-wide mb-3 px-1" style={{ color: colors.textSoft }}>
             Account
           </Text>
 
-          <View className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100 mb-4">
+          <View
+            className="rounded-xl overflow-hidden shadow-sm border mb-4"
+            style={{ backgroundColor: colors.surface, borderColor: colors.border }}
+          >
             {/* ── Change Password row (NEW) ── */}
             <TouchableOpacity
-              className="flex-row items-center justify-between p-4 border-b border-gray-100"
+              className="flex-row items-center justify-between p-4 border-b"
+              style={{ borderBottomColor: colors.border }}
               onPress={() => router.push("/change-password")}
               accessibilityRole="button"
               accessibilityLabel="Change Password"
             >
               <View className="flex-row items-center">
                 <Ionicons name="key-outline" size={22} color="#4B7BEC" />
-                <Text className="text-gray-700 ml-3">Change Password</Text>
+                <Text className="ml-3" style={{ color: colors.text }}>Change Password</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+              <Ionicons name="chevron-forward" size={20} color={colors.textSoft} />
             </TouchableOpacity>
 
-            <TouchableOpacity className="flex-row items-center justify-between p-4 border-b border-gray-100">
+            <TouchableOpacity className="flex-row items-center justify-between p-4 border-b" style={{ borderBottomColor: colors.border }}>
               <View className="flex-row items-center">
                 <Ionicons
                   name="lock-closed-outline"
                   size={22}
                   color="#4B7BEC"
                 />
-                <Text className="text-gray-700 ml-3">Privacy & Security</Text>
+                <Text className="ml-3" style={{ color: colors.text }}>Privacy & Security</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+              <Ionicons name="chevron-forward" size={20} color={colors.textSoft} />
             </TouchableOpacity>
 
-            <TouchableOpacity className="flex-row items-center justify-between p-4 border-b border-gray-100">
+            <TouchableOpacity className="flex-row items-center justify-between p-4 border-b" style={{ borderBottomColor: colors.border }}>
               <View className="flex-row items-center">
                 <Ionicons name="mail-outline" size={22} color="#4B7BEC" />
-                <Text className="text-gray-700 ml-3">Email Settings</Text>
+                <Text className="ml-3" style={{ color: colors.text }}>Email Settings</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+              <Ionicons name="chevron-forward" size={20} color={colors.textSoft} />
             </TouchableOpacity>
 
             <TouchableOpacity className="flex-row items-center justify-between p-4">
@@ -787,16 +792,19 @@ export default function Settings() {
                 <Ionicons name="trash-outline" size={22} color="#EF4444" />
                 <Text className="text-red-500 ml-3">Delete Account</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+              <Ionicons name="chevron-forward" size={20} color={colors.textSoft} />
             </TouchableOpacity>
           </View>
         </View>
 
         {/* About Section */}
         <View className="px-5 mt-2 mb-8">
-          <View className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 items-center">
-            <Text className="text-gray-500 text-sm">Version 1.0.0</Text>
-            <Text className="text-gray-400 text-xs mt-1">© 2024 TaskFlow</Text>
+          <View
+            className="rounded-xl p-4 shadow-sm border items-center"
+            style={{ backgroundColor: colors.surface, borderColor: colors.border }}
+          >
+            <Text className="text-sm" style={{ color: colors.textMuted }}>Version 1.0.0</Text>
+            <Text className="text-xs mt-1" style={{ color: colors.textSoft }}>© 2024 TaskFlow</Text>
           </View>
         </View>
       </ScrollView>

@@ -34,10 +34,12 @@ import {
   deleteDoc,
 } from 'firebase/firestore';
 import { db } from '../src/Firebase/firebaseConfig';
+import { useAppTheme } from '../src/theme/AppThemeContext';
 import {
   notifyAdminJoinRequest,
   notifyMemberJoinRequestDeclined,
   notifyMemberKickedFromGroup,
+  notifyMemberPromotedToAdmin,
   notifyMemberTaskAssigned,
   getUserData,
 } from '../src/utils/notificationHelper';
@@ -48,6 +50,7 @@ type Group = {
   category: string;
   code: string;
   createdBy: string;
+  admins?: string[];
   members: string[];
   tasks?: any[];
   meetings?: any[];
@@ -96,6 +99,7 @@ export default function GroupDetails() {
   const router = useRouter();
   const { groupId, groupName } = useLocalSearchParams();
   const auth = getAuth();
+  const { colors, isDark } = useAppTheme();
   const currentUser = auth.currentUser;
 
   const [group, setGroup] = useState<Group | null>(null);
@@ -113,9 +117,12 @@ export default function GroupDetails() {
   const [showRejectConfirmModal, setShowRejectConfirmModal] = useState(false);
   const [showKickConfirmModal, setShowKickConfirmModal] = useState(false);
   const [showLeaveConfirmModal, setShowLeaveConfirmModal] = useState(false);
+  const [showPromoteConfirmModal, setShowPromoteConfirmModal] = useState(false);
+  const [showAdminLeaveBlockedModal, setShowAdminLeaveBlockedModal] = useState(false);
   const [selectedRequestForAccept, setSelectedRequestForAccept] = useState<JoinRequest | null>(null);
   const [selectedRequestForReject, setSelectedRequestForReject] = useState<JoinRequest | null>(null);
   const [selectedMemberForKick, setSelectedMemberForKick] = useState<Member | null>(null);
+  const [selectedMemberForPromotion, setSelectedMemberForPromotion] = useState<Member | null>(null);
   const [showDeadlinePicker, setShowDeadlinePicker] = useState(false);
   const [showPriorityPicker, setShowPriorityPicker] = useState(false);
   const [selectedDeadlineDate, setSelectedDeadlineDate] = useState<Date>(new Date());
@@ -151,6 +158,9 @@ export default function GroupDetails() {
     deadline: '',
     files: [],
   });
+  const adminIds = group?.admins?.length ? group.admins : group?.createdBy ? [group.createdBy] : [];
+  const isAdmin = !!currentUser?.uid && adminIds.includes(currentUser.uid);
+  const canCurrentAdminLeave = !currentUser?.uid || !isAdmin || adminIds.some((adminId) => adminId !== currentUser.uid);
 
   const fetchGroupDetails = async () => {
     if (!groupId) return;
@@ -159,6 +169,9 @@ export default function GroupDetails() {
       const groupDoc = await getDoc(doc(db, 'groups', groupId as string));
       if (groupDoc.exists()) {
         const groupData = { id: groupDoc.id, ...groupDoc.data() } as Group;
+        if (!groupData.admins || groupData.admins.length === 0) {
+          groupData.admins = groupData.createdBy ? [groupData.createdBy] : [];
+        }
         setGroup(groupData);
 
         const membersData: Member[] = [];
@@ -519,7 +532,7 @@ export default function GroupDetails() {
 
   const archiveTask = async (taskId: string) => {
     if (!isAdmin) {
-      Alert.alert('Error', 'Only group creators can archive tasks');
+      Alert.alert('Error', 'Only group admins can archive tasks');
       return;
     }
     
@@ -542,7 +555,7 @@ export default function GroupDetails() {
 
   const unarchiveTask = async (taskId: string) => {
     if (!isAdmin) {
-      Alert.alert('Error', 'Only group creators can unarchive tasks');
+      Alert.alert('Error', 'Only group admins can unarchive tasks');
       return;
     }
     
@@ -633,12 +646,38 @@ const getMemberContributions = () => {
     .sort((a, b) => b.completionRate - a.completionRate);
 };
 
+  const handleLeaveGroupPress = () => {
+    if (isAdmin && !canCurrentAdminLeave) {
+      setShowAdminLeaveBlockedModal(true);
+      return;
+    }
+
+    setShowLeaveConfirmModal(true);
+  };
+
   const leaveGroup = async () => {
     if (!group || !currentUser) return;
     try {
-      await updateDoc(doc(db, 'groups', group.id), {
+      const remainingAdmins = adminIds.filter((adminId) => adminId !== currentUser.uid);
+      const updates: Record<string, any> = {
         members: arrayRemove(currentUser.uid),
-      });
+      };
+
+      if (isAdmin) {
+        if (remainingAdmins.length === 0) {
+          setShowLeaveConfirmModal(false);
+          setShowAdminLeaveBlockedModal(true);
+          return;
+        }
+
+        updates.admins = remainingAdmins;
+
+        if (group.createdBy === currentUser.uid) {
+          updates.createdBy = remainingAdmins[0];
+        }
+      }
+
+      await updateDoc(doc(db, 'groups', group.id), updates);
       setShowLeaveConfirmModal(false);
       Alert.alert('Success', 'You have left the group', [
         {
@@ -649,6 +688,39 @@ const getMemberContributions = () => {
     } catch (error) {
       console.error('Error leaving group:', error);
       Alert.alert('Error', 'Failed to leave group');
+    }
+  };
+
+  const promoteMemberToAdmin = async (member: Member) => {
+    if (!group || !isAdmin) {
+      Alert.alert('Error', 'Only admins can promote members.');
+      return;
+    }
+
+    if (adminIds.includes(member.uid)) {
+      Alert.alert('Already admin', `${member.name} is already an admin.`);
+      return;
+    }
+
+    try {
+      const adminName = currentUser?.displayName || currentUser?.email || 'Admin';
+      await updateDoc(doc(db, 'groups', group.id), {
+        admins: [...adminIds, member.uid],
+      });
+      await notifyMemberPromotedToAdmin(
+        member.uid,
+        group.name,
+        group.id,
+        adminName,
+        currentUser?.uid || ''
+      );
+      setShowPromoteConfirmModal(false);
+      setSelectedMemberForPromotion(null);
+      Alert.alert('Success', `${member.name} is now an admin.`);
+      fetchGroupDetails();
+    } catch (error) {
+      console.error('Error promoting member:', error);
+      Alert.alert('Error', 'Failed to promote member to admin');
     }
   };
 
@@ -664,11 +736,9 @@ const getMemberContributions = () => {
     });
   };
 
-  const isAdmin = group?.createdBy === currentUser?.uid;
-
   if (isLoading) {
     return (
-      <View className="flex-1 bg-gray-100 items-center justify-center">
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
         <ActivityIndicator size="large" color="#F59E0B" />
       </View>
     );
@@ -676,7 +746,8 @@ const getMemberContributions = () => {
 
   return (
     <ScrollView 
-      className="flex-1 bg-gray-100"
+      className="flex-1"
+      style={{ backgroundColor: colors.background }}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#F59E0B']} />
       }
@@ -685,35 +756,35 @@ const getMemberContributions = () => {
         {/* Header */}
         <View className="flex-row items-center justify-between mb-6">
           <TouchableOpacity onPress={() => router.back()} className="mr-4">
-            <Ionicons name="arrow-back" size={24} color="#333" />
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
-          <Text className="text-2xl font-bold text-gray-800 flex-1" numberOfLines={1}>
+          <Text className="text-2xl font-bold flex-1" style={{ color: colors.text }} numberOfLines={1}>
             {group?.name}
           </Text>
         </View>
 
         {/* Group Info Card */}
-        <View className="bg-white rounded-2xl p-5 mb-6 shadow-sm">
+        <View className="rounded-2xl p-5 mb-6 shadow-sm" style={{ backgroundColor: colors.surface }}>
           <View className="flex-row justify-between items-start mb-3">
             <View>
               <Text className="text-2xl font-bold text-orange-500">{group?.code}</Text>
-              <Text className="text-gray-500 mt-1">
+              <Text className="mt-1" style={{ color: colors.textMuted }}>
                 {members.length} {members.length === 1 ? 'Member' : 'Members'} · {group?.category}
               </Text>
             </View>
-            <View className="bg-orange-100 px-3 py-1 rounded-full">
+            <View className="px-3 py-1 rounded-full" style={{ backgroundColor: isDark ? colors.accentSoft : '#FFEDD5' }}>
               <Text className="text-orange-600 text-sm font-medium">{group?.category}</Text>
             </View>
           </View>
         </View>
 
         {/* Tab Navigation */}
-        <View className="flex-row mb-6 bg-white rounded-xl p-1 shadow-sm">
+        <View className="flex-row mb-6 rounded-xl p-1 shadow-sm" style={{ backgroundColor: colors.surface }}>
           <TouchableOpacity
             onPress={() => setActiveTab('project')}
             className={`flex-1 py-3 rounded-lg ${activeTab === 'project' ? 'bg-yellow-400' : ''}`}
           >
-            <Text className={`text-center font-semibold ${activeTab === 'project' ? 'text-white' : 'text-gray-600'}`}>
+            <Text className={`text-center font-semibold ${activeTab === 'project' ? 'text-white' : ''}`} style={activeTab === 'project' ? undefined : { color: colors.textMuted }}>
               Project
             </Text>
           </TouchableOpacity>
@@ -721,7 +792,7 @@ const getMemberContributions = () => {
             onPress={() => setActiveTab('progress')}
             className={`flex-1 py-3 rounded-lg ${activeTab === 'progress' ? 'bg-yellow-400' : ''}`}
           >
-            <Text className={`text-center font-semibold ${activeTab === 'progress' ? 'text-white' : 'text-gray-600'}`}>
+            <Text className={`text-center font-semibold ${activeTab === 'progress' ? 'text-white' : ''}`} style={activeTab === 'progress' ? undefined : { color: colors.textMuted }}>
               Progress
             </Text>
           </TouchableOpacity>
@@ -729,7 +800,7 @@ const getMemberContributions = () => {
             onPress={() => setActiveTab('members')}
             className={`flex-1 py-3 rounded-lg ${activeTab === 'members' ? 'bg-yellow-400' : ''}`}
           >
-            <Text className={`text-center font-semibold ${activeTab === 'members' ? 'text-white' : 'text-gray-600'}`}>
+            <Text className={`text-center font-semibold ${activeTab === 'members' ? 'text-white' : ''}`} style={activeTab === 'members' ? undefined : { color: colors.textMuted }}>
               Members
             </Text>
           </TouchableOpacity>
@@ -754,26 +825,27 @@ const getMemberContributions = () => {
                 onPress={() => setShowArchiveDropdown(!showArchiveDropdown)}
                 className="flex-row items-center gap-2"
               >
-                <Text className="font-semibold text-gray-800 text-lg">Tasks ({tasks.filter(t => !t.archived).length})</Text>
+                <Text className="font-semibold text-lg" style={{ color: colors.text }}>Tasks ({tasks.filter(t => !t.archived).length})</Text>
                 <Ionicons 
                   name={showArchiveDropdown ? "chevron-up" : "chevron-down"} 
                   size={20} 
-                  color="#6B7280" 
+                  color={colors.textMuted} 
                 />
               </TouchableOpacity>
             </View>
 
             {/* Archive Dropdown */}
             {showArchiveDropdown && (
-              <View className="bg-white rounded-xl p-3 mb-4 shadow-sm">
+              <View className="rounded-xl p-3 mb-4 shadow-sm" style={{ backgroundColor: colors.surface }}>
                 <TouchableOpacity
                   onPress={() => {
                     setShowArchiveTasks(false);
                     setShowArchiveDropdown(false);
                   }}
-                  className={`p-3 rounded-lg mb-2 ${!showArchiveTasks ? 'bg-gray-100' : 'bg-white'}`}
+                  className="p-3 rounded-lg mb-2"
+                  style={{ backgroundColor: !showArchiveTasks ? (isDark ? colors.surfaceMuted : '#F3F4F6') : colors.surface }}
                 >
-                  <Text className={`font-medium ${!showArchiveTasks ? 'text-gray-800' : 'text-gray-600'}`}>
+                  <Text className="font-medium" style={{ color: !showArchiveTasks ? colors.text : colors.textMuted }}>
                     All Tasks ({tasks.filter(t => !t.archived).length})
                   </Text>
                 </TouchableOpacity>
@@ -782,9 +854,10 @@ const getMemberContributions = () => {
                     setShowArchiveTasks(true);
                     setShowArchiveDropdown(false);
                   }}
-                  className={`p-3 rounded-lg ${showArchiveTasks ? 'bg-gray-100' : 'bg-white'}`}
+                  className="p-3 rounded-lg"
+                  style={{ backgroundColor: showArchiveTasks ? (isDark ? colors.surfaceMuted : '#F3F4F6') : colors.surface }}
                 >
-                  <Text className={`font-medium ${showArchiveTasks ? 'text-gray-800' : 'text-gray-600'}`}>
+                  <Text className="font-medium" style={{ color: showArchiveTasks ? colors.text : colors.textMuted }}>
                     Archived Tasks ({tasks.filter(t => t.archived).length})
                   </Text>
                 </TouchableOpacity>
@@ -792,9 +865,9 @@ const getMemberContributions = () => {
             )}
 
             {tasks.length === 0 ? (
-              <View className="bg-white rounded-xl p-8 shadow-sm items-center">
+              <View className="rounded-xl p-8 shadow-sm items-center" style={{ backgroundColor: colors.surface }}>
                 <Ionicons name="clipboard-outline" size={40} color="#D1D5DB" />
-                <Text className="text-gray-500 mt-3">No tasks yet. Create one to get started!</Text>
+                <Text className="mt-3" style={{ color: colors.textMuted }}>No tasks yet. Create one to get started!</Text>
               </View>
             ) : (
               <View className="space-y-3 mb-6">
@@ -808,13 +881,22 @@ const getMemberContributions = () => {
                       activeOpacity={0.7}
                     >
                       <View
-                        className={`bg-white rounded-xl p-4 shadow-sm border-l-4 ${getTaskBorderColor(task)}`}
+                        className={`rounded-xl p-4 shadow-sm border-l-4 ${getTaskBorderColor(task)}`}
+                        style={{
+                          backgroundColor: colors.surface,
+                          borderTopWidth: isDark ? 1 : 0,
+                          borderRightWidth: isDark ? 1 : 0,
+                          borderBottomWidth: isDark ? 1 : 0,
+                          borderTopColor: '#FFFFFF',
+                          borderRightColor: '#FFFFFF',
+                          borderBottomColor: '#FFFFFF',
+                        }}
                       >
                         <View className="flex-row items-start justify-between">
                           <View className="flex-row items-start flex-1">
                             <View className="flex-1">
                               <View className="flex-row items-center gap-2 mb-1 flex-wrap">
-                                <Text className={`font-semibold ${isCompletedByCurrentUser ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                                <Text className={`font-semibold ${isCompletedByCurrentUser ? 'line-through' : ''}`} style={{ color: isCompletedByCurrentUser ? colors.textSoft : colors.text }}>
                                   {task.title}
                                 </Text>
                                 {isCompletedByCurrentUser && (
@@ -824,16 +906,16 @@ const getMemberContributions = () => {
                                 )}
                               </View>
                               {task.description ? (
-                                <Text className="text-xs text-gray-500 mt-1" numberOfLines={2}>
+                                <Text className="text-xs mt-1" numberOfLines={2} style={{ color: colors.textMuted }}>
                                   {task.description}
                                 </Text>
                               ) : null}
                               <View className="flex-row items-center gap-2 mt-2">
                                 <Ionicons name="calendar-outline" size={12} color="#9CA3AF" />
-                                <Text className="text-xs text-gray-600">
+                                <Text className="text-xs" style={{ color: colors.textMuted }}>
                                   Due: {new Date(task.deadline).toLocaleDateString()}
                                 </Text>
-                                <Text className="text-xs text-gray-600">• {task.priority}</Text>
+                                <Text className="text-xs" style={{ color: colors.textMuted }}>• {task.priority}</Text>
                               </View>
                               
                               {/* Show how many members completed the task */}
@@ -882,30 +964,30 @@ const getMemberContributions = () => {
         {/* Progress Tab Content */}
         {activeTab === 'progress' && (
           <View>
-            <View className="bg-white rounded-xl p-6 mb-6 shadow-sm">
-              <Text className="text-lg font-bold text-gray-800 mb-4">Task Overview</Text>
+            <View className="rounded-xl p-6 mb-6 shadow-sm" style={{ backgroundColor: colors.surface }}>
+              <Text className="text-lg font-bold mb-4" style={{ color: colors.text }}>Task Overview</Text>
               <View className="flex-row justify-around">
                 <View className="items-center">
                   <Text className="text-4xl font-bold text-yellow-400">{getTaskStats().completionRate}%</Text>
-                  <Text className="text-xs text-gray-600 mt-2">Completed</Text>
+                  <Text className="text-xs mt-2" style={{ color: colors.textMuted }}>Completed</Text>
                 </View>
                 <View className="items-center">
                   <Text className="text-4xl font-bold text-green-500">{getTaskStats().completedTasks}</Text>
-                  <Text className="text-xs text-gray-600 mt-2">Done</Text>
+                  <Text className="text-xs mt-2" style={{ color: colors.textMuted }}>Done</Text>
                 </View>
                 <View className="items-center">
                   <Text className="text-4xl font-bold text-orange-500">{getTaskStats().pendingTasks}</Text>
-                  <Text className="text-xs text-gray-600 mt-2">Pending</Text>
+                  <Text className="text-xs mt-2" style={{ color: colors.textMuted }}>Pending</Text>
                 </View>
                 <View className="items-center">
                   <Text className="text-4xl font-bold text-red-500">{getTaskStats().overdueTasks}</Text>
-                  <Text className="text-xs text-gray-600 mt-2">Overdue</Text>
+                  <Text className="text-xs mt-2" style={{ color: colors.textMuted }}>Overdue</Text>
                 </View>
               </View>
             </View>
 
-            <View className="bg-white rounded-xl p-4 shadow-sm">
-              <Text className="text-lg font-bold text-gray-800 mb-4">Member Performance</Text>
+            <View className="rounded-xl p-4 shadow-sm" style={{ backgroundColor: colors.surface }}>
+              <Text className="text-lg font-bold mb-4" style={{ color: colors.text }}>Member Performance</Text>
               {getMemberContributions().length === 0 ? (
                 <Text className="text-gray-500 text-center py-4">No members with assigned tasks</Text>
               ) : (
@@ -925,8 +1007,8 @@ const getMemberContributions = () => {
                             </View>
                           )}
                           <View className="flex-1">
-                            <Text className="font-medium text-gray-800">{member.name}</Text>
-                            <Text className="text-xs text-gray-500">{member.tasksCompleted}/{member.tasksTotal}</Text>
+                            <Text className="font-medium" style={{ color: colors.text }}>{member.name}</Text>
+                            <Text className="text-xs" style={{ color: colors.textMuted }}>{member.tasksCompleted}/{member.tasksTotal}</Text>
                           </View>
                         </View>
                         <Text className="text-lg font-bold text-yellow-500">{member.completionRate}%</Text>
@@ -950,15 +1032,15 @@ const getMemberContributions = () => {
           <View>
             {isAdmin && joinRequests.length > 0 && (
               <View className="mb-6">
-                <Text className="font-semibold text-gray-800 mb-3">
+                <Text className="font-semibold mb-3" style={{ color: colors.text }}>
                   Join Requests ({joinRequests.length})
                 </Text>
                 {joinRequests.map((request) => (
-                  <View key={request.id} className="bg-white rounded-xl p-4 mb-3 shadow-sm">
+                  <View key={request.id} className="rounded-xl p-4 mb-3 shadow-sm" style={{ backgroundColor: colors.surface }}>
                     <View className="flex-row justify-between items-center">
                       <View className="flex-1">
-                        <Text className="font-semibold text-gray-800">{request.userName}</Text>
-                        <Text className="text-xs text-gray-500 mt-1">{request.userEmail}</Text>
+                        <Text className="font-semibold" style={{ color: colors.text }}>{request.userName}</Text>
+                        <Text className="text-xs mt-1" style={{ color: colors.textMuted }}>{request.userEmail}</Text>
                       </View>
                       <View className="flex-row">
                         <TouchableOpacity
@@ -986,9 +1068,9 @@ const getMemberContributions = () => {
               </View>
             )}
 
-            <Text className="font-semibold text-gray-800 mb-3">Members ({members.length})</Text>
+            <Text className="font-semibold mb-3" style={{ color: colors.text }}>Members ({members.length})</Text>
             {members.map((member) => (
-              <View key={member.uid} className="bg-white rounded-xl p-4 mb-3 shadow-sm">
+              <View key={member.uid} className="rounded-xl p-4 mb-3 shadow-sm" style={{ backgroundColor: colors.surface }}>
                 <View className="flex-row justify-between items-center">
                   <View className="flex-row items-center flex-1">
                     {member.profileImage ? (
@@ -1004,11 +1086,11 @@ const getMemberContributions = () => {
                       </View>
                     )}
                     <View className="flex-1">
-                      <Text className="font-semibold text-gray-800">{member.name}</Text>
+                      <Text className="font-semibold" style={{ color: colors.text }}>{member.name}</Text>
                       {member.email ? (
-                        <Text className="text-xs text-gray-500 mt-1">{member.email}</Text>
+                        <Text className="text-xs mt-1" style={{ color: colors.textMuted }}>{member.email}</Text>
                       ) : null}
-                      {member.uid === group?.createdBy && (
+                      {adminIds.includes(member.uid) && (
                         <View className="bg-yellow-100 px-2 py-0.5 rounded-full mt-1 self-start">
                           <Text className="text-xs text-yellow-700 font-medium">Admin</Text>
                         </View>
@@ -1016,18 +1098,32 @@ const getMemberContributions = () => {
                     </View>
                   </View>
                   {isAdmin && member.uid !== currentUser?.uid && (
-                    <TouchableOpacity 
-                      onPress={() => {
-                        setSelectedMemberForKick(member);
-                        setShowKickConfirmModal(true);
-                      }}
-                    >
-                      <Ionicons name="trash-outline" size={20} color="#EF4444" />
-                    </TouchableOpacity>
+                    <View className="flex-row items-center gap-3">
+                      {!adminIds.includes(member.uid) && (
+                        <TouchableOpacity
+                          onPress={() => {
+                            setSelectedMemberForPromotion(member);
+                            setShowPromoteConfirmModal(true);
+                          }}
+                        >
+                          <Text className="text-sm font-medium text-blue-500">Promote</Text>
+                        </TouchableOpacity>
+                      )}
+                      {!adminIds.includes(member.uid) && (
+                        <TouchableOpacity 
+                          onPress={() => {
+                            setSelectedMemberForKick(member);
+                            setShowKickConfirmModal(true);
+                          }}
+                        >
+                          <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   )}
-                  {!isAdmin && member.uid === currentUser?.uid && (
+                  {member.uid === currentUser?.uid && (
                     <TouchableOpacity 
-                      onPress={() => setShowLeaveConfirmModal(true)}
+                      onPress={handleLeaveGroupPress}
                       className="px-3 py-1 rounded-lg bg-red-100"
                     >
                       <Text className="text-red-600 text-sm font-medium">Leave</Text>
@@ -1047,8 +1143,8 @@ const getMemberContributions = () => {
         transparent={true}
         onRequestClose={() => setShowTaskModal(false)}
       >
-        <View className="flex-1 bg-black/50 justify-end">
-          <View className="bg-white rounded-t-3xl p-6 max-h-[90%]">
+        <View className="flex-1 justify-end" style={{ backgroundColor: colors.overlay }}>
+          <View className="rounded-t-3xl p-6 max-h-[90%]" style={{ backgroundColor: colors.surface }}>
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-xl font-bold text-gray-800">Create New Task</Text>
               <TouchableOpacity onPress={() => {
@@ -1062,7 +1158,7 @@ const getMemberContributions = () => {
             <ScrollView showsVerticalScrollIndicator={false}>
               {/* Title Input */}
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Title</Text>
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>Title</Text>
                 <TextInput
                   className="border border-gray-300 rounded-lg p-3"
                   placeholder="Enter task title"
@@ -1071,12 +1167,13 @@ const getMemberContributions = () => {
                     setTaskFormData((prev) => ({ ...prev, title: text }))
                   }
                   placeholderTextColor="#9CA3AF"
+                  style={{ color: colors.text }}
                 />
               </View>
 
               {/* Description Input with @mention */}
               <View className="mb-4" style={{ zIndex: showMentions ? 100 : 1 }}>
-                <Text className="text-sm font-semibold text-gray-700 mb-2">
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>
                   Description (Use @ to mention team members)
                 </Text>
 
@@ -1090,6 +1187,7 @@ const getMemberContributions = () => {
                     onChangeText={handleDescriptionChange}
                     multiline
                     placeholderTextColor="#9CA3AF"
+                    style={{ color: colors.text }}
                   />
 
                   {/* Mention Suggestions Dropdown */}
@@ -1199,11 +1297,11 @@ const getMemberContributions = () => {
                               )}
                               
                               <View className="flex-1">
-                                <Text className="font-semibold text-gray-800">
+                                <Text className="font-semibold" style={{ color: colors.text }}>
                                   {item.name}
                                 </Text>
                                 {item.email && (
-                                  <Text className="text-xs text-gray-500" numberOfLines={1}>
+                                  <Text className="text-xs" numberOfLines={1} style={{ color: colors.textMuted }}>
                                     {item.email}
                                   </Text>
                                 )}
@@ -1216,7 +1314,7 @@ const getMemberContributions = () => {
                           )}
                           ListEmptyComponent={
                             <View className="p-6 items-center">
-                              <Text className="text-gray-400">No members found</Text>
+                              <Text style={{ color: colors.textMuted }}>No members found</Text>
                             </View>
                           }
                         />
@@ -1229,7 +1327,7 @@ const getMemberContributions = () => {
               {/* File Upload */}
               <View className="mb-4">
                 <View className="flex-row justify-between items-center mb-2">
-                  <Text className="text-sm font-semibold text-gray-700">
+                  <Text className="text-sm font-semibold" style={{ color: colors.textMuted }}>
                     Files ({taskFormData.files.length})
                   </Text>
                 </View>
@@ -1268,7 +1366,7 @@ const getMemberContributions = () => {
                 </TouchableOpacity>
 
                 {taskFormData.files.length > 0 && (
-                  <View className="bg-gray-50 rounded-lg p-3 gap-2">
+                  <View className="rounded-lg p-3 gap-2" style={{ backgroundColor: colors.surface }}>
                     {taskFormData.files.map((file, index) => (
                       <View
                         key={index}
@@ -1276,7 +1374,7 @@ const getMemberContributions = () => {
                       >
                         <View className="flex-row items-center gap-2 flex-1">
                           <Ionicons name="document" size={18} color="#6B7280" />
-                          <Text className="text-sm text-gray-700 flex-1" numberOfLines={1}>
+                          <Text className="text-sm flex-1" numberOfLines={1} style={{ color: colors.text }}>
                             {file.name}
                           </Text>
                         </View>
@@ -1299,13 +1397,13 @@ const getMemberContributions = () => {
 
               {/* Priority */}
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Priority</Text>
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>Priority</Text>
                 <TouchableOpacity
                   onPress={() => setShowPriorityPicker(true)}
                   className="border border-gray-300 rounded-lg p-3 bg-white"
                 >
                   <View className="flex-row justify-between items-center">
-                    <Text className={taskFormData.priority ? 'text-gray-700 font-semibold' : 'text-gray-400'}>
+                    <Text className="font-semibold" style={{ color: taskFormData.priority ? colors.text : colors.textMuted }}>
                       {taskFormData.priority || 'Select priority'}
                     </Text>
                     <Ionicons name="chevron-down" size={20} color="#9CA3AF" />
@@ -1315,7 +1413,7 @@ const getMemberContributions = () => {
 
               {/* Deadline */}
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Deadline (Date & Time)</Text>
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>Deadline (Date & Time)</Text>
                 <TouchableOpacity
                   className="border border-gray-300 rounded-lg p-3 bg-white"
                   onPress={() => {
@@ -1344,7 +1442,7 @@ const getMemberContributions = () => {
                   }}
                 >
                   <View className="flex-row justify-between items-center">
-                    <Text className={taskFormData.deadline ? 'text-gray-700 font-semibold' : 'text-gray-400'}>
+                    <Text className="font-semibold" style={{ color: taskFormData.deadline ? colors.text : colors.textMuted }}>
                       {taskFormData.deadline
                         ? new Date(taskFormData.deadline).toLocaleString('en-US', {
                             month: 'short',
@@ -1362,8 +1460,8 @@ const getMemberContributions = () => {
 
               {/* Assign Members */}
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Assign to Members</Text>
-                <View className="bg-gray-50 rounded-lg p-3 max-h-60">
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>Assign to Members</Text>
+                <View className="rounded-lg p-3 max-h-60" style={{ backgroundColor: colors.surface }}>
                   <ScrollView showsVerticalScrollIndicator={true}>
                     {members.length === 0 ? (
                       <Text className="text-gray-500 text-center py-4">No members available</Text>
@@ -1434,7 +1532,7 @@ const getMemberContributions = () => {
                   }}
                   className="flex-1 border border-gray-300 rounded-lg py-3"
                 >
-                  <Text className="text-center text-gray-700 font-semibold">Cancel</Text>
+                <Text className="text-center font-semibold" style={{ color: colors.text }}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={handleCreateTask}
@@ -1462,7 +1560,7 @@ const getMemberContributions = () => {
         <View className="flex-1 bg-black/50 justify-end">
           <View className="bg-white rounded-t-2xl pb-6">
             <View className="flex-row justify-between items-center p-4 border-b border-gray-200">
-              <Text className="text-lg font-semibold text-gray-900">Select Deadline</Text>
+              <Text className="text-lg font-semibold" style={{ color: colors.text }}>Select Deadline</Text>
               <TouchableOpacity onPress={() => setShowDeadlinePicker(false)}>
                 <Ionicons name="close" size={24} color="#6B7280" />
               </TouchableOpacity>
@@ -1480,7 +1578,7 @@ const getMemberContributions = () => {
                   >
                     <Ionicons name="chevron-back" size={24} color="#EAB308" />
                   </TouchableOpacity>
-                  <Text className="text-base font-semibold text-gray-900">
+                  <Text className="text-base font-semibold" style={{ color: colors.text }}>
                     {selectedDeadlineDate.toLocaleString('en-US', { month: 'long', year: 'numeric' })}
                   </Text>
                   <TouchableOpacity
@@ -1554,7 +1652,7 @@ const getMemberContributions = () => {
               </View>
 
               <View className="border-t border-gray-200 pt-6">
-                <Text className="text-sm font-semibold text-gray-700 mb-4">Time:</Text>
+                  <Text className="text-sm font-semibold mb-4" style={{ color: colors.textMuted }}>Time:</Text>
                 <View className="flex-row gap-4 items-center">
                   <View className="flex-1">
                     <Text className="text-xs text-gray-600 mb-2">Hour (1-12)</Text>
@@ -1663,7 +1761,7 @@ const getMemberContributions = () => {
         <View className="flex-1 bg-black/50 justify-end">
           <View className="bg-white rounded-t-2xl pb-6">
             <View className="flex-row justify-between items-center p-4 border-b border-gray-200">
-              <Text className="text-lg font-semibold text-gray-900">Select Priority</Text>
+              <Text className="text-lg font-semibold" style={{ color: colors.text }}>Select Priority</Text>
               <TouchableOpacity onPress={() => setShowPriorityPicker(false)}>
                 <Ionicons name="close" size={24} color="#6B7280" />
               </TouchableOpacity>
@@ -1819,7 +1917,7 @@ const getMemberContributions = () => {
 
             <View className="bg-orange-50 rounded-lg p-3 mb-6">
               <Text className="text-sm text-gray-700 text-center">
-                This member's request to join <Text className="font-semibold">{group?.name}</Text> will be rejected. They can send another request later.
+                This member&apos;s request to join <Text className="font-semibold">{group?.name}</Text> will be rejected. They can send another request later.
               </Text>
             </View>
 
@@ -1902,6 +2000,12 @@ const getMemberContributions = () => {
               <TouchableOpacity
                 onPress={async () => {
                   if (selectedMemberForKick) {
+                    if (adminIds.includes(selectedMemberForKick.uid)) {
+                      Alert.alert('Admin protected', 'Admins cannot be removed. Ask them to leave the group instead.');
+                      setShowKickConfirmModal(false);
+                      setSelectedMemberForKick(null);
+                      return;
+                    }
                     try {
                       await updateDoc(doc(db, 'groups', groupId as string), {
                         members: arrayRemove(selectedMemberForKick.uid),
@@ -2019,7 +2123,7 @@ const getMemberContributions = () => {
             </View>
             
             <Text className="text-gray-600 text-center mb-6">
-              Are you sure you want to leave "{group?.name}"? You can rejoin later using the group code.
+              Are you sure you want to leave &quot;{group?.name}&quot;? You can rejoin later using the group code.
             </Text>
             
             <View className="flex-row gap-3">
@@ -2036,6 +2140,84 @@ const getMemberContributions = () => {
                 <Text className="text-white text-center font-semibold">Leave</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Promote Admin Confirmation Modal */}
+      <Modal
+        visible={showPromoteConfirmModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setShowPromoteConfirmModal(false);
+          setSelectedMemberForPromotion(null);
+        }}
+      >
+        <View className="flex-1 bg-black/50 justify-center items-center">
+          <View className="bg-white rounded-2xl p-6 w-80 shadow-lg">
+            <View className="items-center mb-4">
+              <View className="bg-blue-100 rounded-full p-4 mb-3">
+                <Ionicons name="shield-checkmark-outline" size={32} color="#2563EB" />
+              </View>
+              <Text className="text-xl font-bold text-gray-800 text-center">Promote Member?</Text>
+            </View>
+
+            <Text className="text-gray-600 text-center mb-6">
+              Promote {selectedMemberForPromotion?.name || 'this member'} to admin in &quot;{group?.name}&quot;?
+            </Text>
+
+            <View className="flex-row gap-3">
+              <TouchableOpacity
+                onPress={() => {
+                  setShowPromoteConfirmModal(false);
+                  setSelectedMemberForPromotion(null);
+                }}
+                className="flex-1 bg-gray-200 rounded-lg py-3"
+              >
+                <Text className="text-gray-800 text-center font-semibold">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  if (selectedMemberForPromotion) {
+                    promoteMemberToAdmin(selectedMemberForPromotion);
+                  }
+                }}
+                className="flex-1 bg-blue-500 rounded-lg py-3"
+              >
+                <Text className="text-white text-center font-semibold">Promote</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Last Admin Leave Blocked Modal */}
+      <Modal
+        visible={showAdminLeaveBlockedModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowAdminLeaveBlockedModal(false)}
+      >
+        <View className="flex-1 bg-black/50 justify-center items-center">
+          <View className="bg-white rounded-2xl p-6 w-80 shadow-lg">
+            <View className="items-center mb-4">
+              <View className="bg-amber-100 rounded-full p-4 mb-3">
+                <Ionicons name="warning-outline" size={32} color="#D97706" />
+              </View>
+              <Text className="text-xl font-bold text-gray-800 text-center">Another Admin Needed</Text>
+            </View>
+
+            <Text className="text-gray-600 text-center mb-6">
+              This group does not have another admin yet. Promote a member first before you leave &quot;{group?.name}&quot;.
+            </Text>
+
+            <TouchableOpacity
+              onPress={() => setShowAdminLeaveBlockedModal(false)}
+              className="bg-amber-500 rounded-lg py-3"
+            >
+              <Text className="text-white text-center font-semibold">OK</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
