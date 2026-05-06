@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons"; // Make sure to install expo/vector-icons
+import { useAppTheme } from "@/src/theme/AppThemeContext";
 
 type CheckItemProps = {
   met: boolean;
@@ -115,6 +116,7 @@ function PasswordValidationTooltip({
 }
 
 export default function Login() {
+  const { colors } = useAppTheme();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -188,8 +190,8 @@ export default function Login() {
   };
 
   return (
-    <View className="flex-1 justify-center px-6 bg-white">
-      <Text className="text-3xl font-bold text-center mb-10">Login</Text>
+    <View className="flex-1 justify-center px-6" style={{ backgroundColor: colors.background }}>
+      <Text className="text-3xl font-bold text-center mb-10" style={{ color: colors.text }}>Login</Text>
 
       {error ? (
         <Text className="text-red-500 text-center mb-4">{error}</Text>
@@ -207,7 +209,9 @@ export default function Login() {
             editable={!loading}
             autoCapitalize="none"
             keyboardType="email-address"
-            className="border p-4 rounded-xl border-gray-300 bg-white"
+            className="border p-4 rounded-xl"
+            style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+            placeholderTextColor={colors.textSoft}
           />
           
           <EmailValidationTooltip 
@@ -230,7 +234,9 @@ export default function Login() {
               onBlur={() => setFocusedField(null)}
               editable={!loading}
               secureTextEntry={!showPassword}
-              className="border p-4 rounded-xl border-gray-300 bg-white pr-12"
+              className="border p-4 rounded-xl pr-12"
+              style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+              placeholderTextColor={colors.textSoft}
             />
             
             <Pressable
@@ -241,7 +247,7 @@ export default function Login() {
               <Ionicons 
                 name={showPassword ? "eye-off" : "eye"} 
                 size={24} 
-                color="#9CA3AF" 
+                color={colors.textSoft} 
               />
             </Pressable>
           </View>
@@ -289,8 +295,8 @@ export default function Login() {
       </Pressable>
 
       <Pressable onPress={() => router.push("./register")} disabled={loading}>
-        <Text className="text-center text-gray-500">
-          Don't have an account? Register
+        <Text className="text-center" style={{ color: colors.textMuted }}>
+          Don&apos;t have an account? Register
         </Text>
       </Pressable>
     </View>

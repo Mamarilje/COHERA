@@ -12,6 +12,7 @@ import {
   Modal,
   RefreshControl,
   ScrollView,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -20,6 +21,7 @@ import {
 import { db } from "../../src/Firebase/firebaseConfig";
 import { supabase } from "../../src/Supabase/supabaseConfig";
 import { uploadProfilePhoto } from "../../src/lib/supabaseStorage";
+import { useAppTheme } from "../../src/theme/AppThemeContext";
 
 type TaskStats = {
   total: number;
@@ -32,10 +34,32 @@ type GroupStats = {
   total: number;
 };
 
+type UserProfileData = {
+  userName: string;
+  userTitle: string;
+  userEmail: string;
+  profileImage: string;
+};
+
+const FIRESTORE_IN_QUERY_LIMIT = 10;
+
+const chunkArray = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
+};
+
 export default function Profile() {
   const router = useRouter();
   const auth = getAuth();
+  const { isDark, toggleTheme, colors } = useAppTheme();
   const user = auth.currentUser;
+  const hasLoadedOnceRef = useRef(false);
+  const isLoadingRef = useRef(false);
 
   // Profile Data
   const [userName, setUserName] = useState("");
@@ -45,6 +69,8 @@ export default function Profile() {
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [showSignOutModal, setShowSignOutModal] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
   // Stats Data
   const [taskStats, setTaskStats] = useState<TaskStats>({
@@ -83,20 +109,27 @@ export default function Profile() {
   }, [showEditModal]);
 
   // Fetch user data from Firebase and Supabase
-  const fetchUserData = async () => {
+  const fetchUserData = useCallback(async (): Promise<UserProfileData> => {
     if (!user) {
-      setIsLoading(false);
-      return;
+      return {
+        userName: "",
+        userTitle: "",
+        userEmail: "",
+        profileImage: "",
+      };
     }
 
     try {
-      setUserEmail(user.email || "");
+      let resolvedName = "";
+      let resolvedTitle = "";
+      let resolvedEmail = user.email || "";
+      let resolvedProfileImage = "";
 
       const userDoc = await getDoc(doc(db, "users", user.uid));
       if (userDoc.exists()) {
         const userData = userDoc.data();
-        setUserName(userData.name || userData.displayName || "");
-        setUserTitle(userData.title || "");
+        resolvedName = userData.name || userData.displayName || "";
+        resolvedTitle = userData.title || "";
       }
 
       const { data, error } = await supabase
@@ -110,133 +143,175 @@ export default function Profile() {
       }
 
       if (data) {
-        if (data.full_name && !userName) {
-          setUserName(data.full_name);
+        if (data.full_name && !resolvedName) {
+          resolvedName = data.full_name;
         }
 
         if (data.photo_url) {
-          setProfileImage(data.photo_url + "?t=" + new Date().getTime());
+          resolvedProfileImage = data.photo_url + "?t=" + new Date().getTime();
         }
       }
+
+      return {
+        userName: resolvedName,
+        userTitle: resolvedTitle,
+        userEmail: resolvedEmail,
+        profileImage: resolvedProfileImage,
+      };
     } catch (err) {
       console.error("Error loading profile:", err);
+      return {
+        userName: "",
+        userTitle: "",
+        userEmail: user.email || "",
+        profileImage: "",
+      };
     }
-  };
+  }, [user]);
 
-  // Fetch real task statistics
-  const fetchTaskStats = async () => {
-    if (!user) return;
+  const fetchUserGroupIds = useCallback(async () => {
+    if (!user) {
+      return [];
+    }
 
     try {
       const groupsRef = collection(db, 'groups');
       const groupsQuery = query(groupsRef, where('members', 'array-contains', user.uid));
       const groupsSnapshot = await getDocs(groupsQuery);
-      
-      const userGroupIds: string[] = [];
-      groupsSnapshot.forEach((doc) => {
-        userGroupIds.push(doc.id);
-      });
-      
-      if (userGroupIds.length === 0) {
-        setTaskStats({
-          total: 0,
-          completed: 0,
-          inProgress: 0,
-          completionRate: 0,
-        });
-        return;
-      }
-      
+
+      return groupsSnapshot.docs.map((groupDoc) => groupDoc.id);
+    } catch (error) {
+      console.error('Error fetching user groups:', error);
+      return [];
+    }
+  }, [user]);
+
+  const fetchTaskStats = useCallback(async (userGroupIds: string[]): Promise<TaskStats> => {
+    if (!user || userGroupIds.length === 0) {
+      return {
+        total: 0,
+        completed: 0,
+        inProgress: 0,
+        completionRate: 0,
+      };
+    }
+
+    try {
       const tasksRef = collection(db, 'tasks');
-      let total = 0;
-      let completed = 0;
-      let inProgress = 0;
-      
-      for (const groupId of userGroupIds) {
-        const tasksQuery = query(tasksRef, where('groupId', '==', groupId));
-        const tasksSnapshot = await getDocs(tasksQuery);
-        
-        total += tasksSnapshot.size;
-        
-        for (const doc of tasksSnapshot.docs) {
-          const data = doc.data();
-          if (data.completed) {
-            completed++;
-          }
-          
-          // Check for in-progress tasks
-          let taskStatus = data.status || 'todo';
-          try {
-            const submissionsRef = collection(db, 'submissions');
-            const submissionsQuery = query(submissionsRef, where('taskId', '==', doc.id));
-            const submissionsSnapshot = await getDocs(submissionsQuery);
-            
-            const hasProgressSubmission = submissionsSnapshot.docs.some(
-              (subDoc) => subDoc.data().status === 'Progress'
-            );
-            
-            if (hasProgressSubmission) {
-              taskStatus = 'in progress';
-            }
-          } catch (subError: any) {
-            if (subError.code !== 'permission-denied') {
-              console.error('Error checking submissions:', subError);
-            }
-          }
-          
-          if (taskStatus === 'in progress') {
-            inProgress++;
+      const taskSnapshots = await Promise.all(
+        chunkArray(userGroupIds, FIRESTORE_IN_QUERY_LIMIT).map((groupIdChunk) =>
+          getDocs(query(tasksRef, where('groupId', 'in', groupIdChunk)))
+        )
+      );
+
+      const taskDocs = taskSnapshots.flatMap((snapshot) => snapshot.docs);
+      const total = taskDocs.length;
+      const completed = taskDocs.filter((taskDoc) => Boolean(taskDoc.data().completed)).length;
+      const incompleteTaskIds = taskDocs
+        .filter((taskDoc) => !taskDoc.data().completed)
+        .map((taskDoc) => taskDoc.id);
+
+      const progressTaskIds = new Set<string>();
+
+      if (incompleteTaskIds.length > 0) {
+        try {
+          const submissionsRef = collection(db, 'submissions');
+          const submissionSnapshots = await Promise.all(
+            chunkArray(incompleteTaskIds, FIRESTORE_IN_QUERY_LIMIT).map((taskIdChunk) =>
+              getDocs(query(submissionsRef, where('taskId', 'in', taskIdChunk)))
+            )
+          );
+
+          submissionSnapshots.forEach((snapshot) => {
+            snapshot.docs.forEach((submissionDoc) => {
+              const submission = submissionDoc.data();
+
+              if (submission.status === 'Progress' && submission.taskId) {
+                progressTaskIds.add(submission.taskId);
+              }
+            });
+          });
+        } catch (subError: any) {
+          if (subError.code !== 'permission-denied') {
+            console.error('Error checking submissions:', subError);
           }
         }
       }
-      
+
+      const inProgress = taskDocs.filter((taskDoc) => progressTaskIds.has(taskDoc.id)).length;
       const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
-      
-      setTaskStats({ total, completed, inProgress, completionRate });
-      
+
+      return { total, completed, inProgress, completionRate };
     } catch (error) {
       console.error('Error fetching task stats:', error);
+      return {
+        total: 0,
+        completed: 0,
+        inProgress: 0,
+        completionRate: 0,
+      };
     }
-  };
+  }, [user]);
 
-  // Fetch real group statistics
-  const fetchGroupStats = async () => {
-    if (!user) return;
+  const loadAllData = useCallback(async ({ showSpinner = true } = {}) => {
+    if (isLoadingRef.current) {
+      return;
+    }
+
+    if (!user) {
+      setUserName("");
+      setUserTitle("");
+      setUserEmail("");
+      setProfileImage("");
+      setTaskStats({
+        total: 0,
+        completed: 0,
+        inProgress: 0,
+        completionRate: 0,
+      });
+      setGroupStats({ total: 0 });
+      setIsLoading(false);
+      setRefreshing(false);
+      hasLoadedOnceRef.current = false;
+      return;
+    }
 
     try {
-      const groupsRef = collection(db, 'groups');
-      const groupsQuery = query(groupsRef, where('members', 'array-contains', user.uid));
-      const groupsSnapshot = await getDocs(groupsQuery);
-      
-      setGroupStats({ total: groupsSnapshot.size });
-      
-    } catch (error) {
-      console.error('Error fetching group stats:', error);
-    }
-  };
+      isLoadingRef.current = true;
+      if (showSpinner) {
+        setIsLoading(true);
+      }
 
-  const loadAllData = async () => {
-    if (!user) return;
-    
-    await Promise.all([
-      fetchUserData(),
-      fetchTaskStats(),
-      fetchGroupStats(),
-    ]);
-    setIsLoading(false);
-    setRefreshing(false);
-  };
+      const [profileData, userGroupIds] = await Promise.all([
+        fetchUserData(),
+        fetchUserGroupIds(),
+      ]);
+      const resolvedTaskStats = await fetchTaskStats(userGroupIds);
+
+      setUserName(profileData.userName);
+      setUserTitle(profileData.userTitle);
+      setUserEmail(profileData.userEmail);
+      setProfileImage(profileData.profileImage);
+      setTaskStats(resolvedTaskStats);
+      setGroupStats({ total: userGroupIds.length });
+      hasLoadedOnceRef.current = true;
+    } finally {
+      setIsLoading(false);
+      setRefreshing(false);
+      isLoadingRef.current = false;
+    }
+  }, [fetchTaskStats, fetchUserData, fetchUserGroupIds, user]);
 
   useEffect(() => {
     loadAllData();
-  }, [user]);
+  }, [loadAllData, user?.uid]);
 
   useFocusEffect(
     useCallback(() => {
-      if (user) {
-        loadAllData();
+      if (user && hasLoadedOnceRef.current) {
+        loadAllData({ showSpinner: false });
       }
-    }, [user])
+    }, [loadAllData, user])
   );
 
   const onRefresh = async () => {
@@ -374,40 +449,40 @@ export default function Profile() {
   }, [user, tempEmail]);
 
   const handleSignOut = async () => {
-    Alert.alert(
-      "Sign Out",
-      "Are you sure you want to sign out?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Sign Out",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await signOut(auth);
-              router.replace("/login");
-            } catch (error: any) {
-              Alert.alert("Error", error.message || "Failed to sign out");
-            }
-          },
-        },
-      ]
-    );
+    setShowSignOutModal(true);
+  };
+
+  const confirmSignOut = async () => {
+    if (isSigningOut) {
+      return;
+    }
+
+    try {
+      setIsSigningOut(true);
+      await signOut(auth);
+      setShowSignOutModal(false);
+      router.replace("/login");
+    } catch (error: any) {
+      Alert.alert("Error", error.message || "Failed to sign out");
+    } finally {
+      setIsSigningOut(false);
+    }
   };
 
   if (isLoading) {
     return (
-      <View className="flex-1 bg-white items-center justify-center">
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
         <ActivityIndicator size="large" color="#EAB308" />
       </View>
     );
   }
 
   return (
-    <View className="flex-1 bg-white">
+    <View className="flex-1" style={{ backgroundColor: colors.background }}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         className="flex-1"
+        style={{ backgroundColor: colors.background }}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#EAB308']} />
         }
@@ -447,7 +522,10 @@ export default function Profile() {
 
         {/* Stats Card - Below the yellow header (not overlapped) */}
         <View className="px-5 pt-6 pb-2">
-          <View className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <View
+            className="rounded-2xl p-5 shadow-sm border"
+            style={{ backgroundColor: colors.surface, borderColor: colors.border }}
+          >
             <View className="flex-row justify-between">
               {/* Tasks Stat */}
               <TouchableOpacity 
@@ -459,8 +537,8 @@ export default function Profile() {
                   <View className="bg-yellow-50 rounded-full p-3 mb-2">
                     <Ionicons name="checkbox-outline" size={24} color="#EAB308" />
                   </View>
-                  <Text className="text-2xl font-bold text-gray-800">{taskStats.total}</Text>
-                  <Text className="text-sm text-gray-500">Tasks</Text>
+                  <Text className="text-2xl font-bold" style={{ color: colors.text }}>{taskStats.total}</Text>
+                  <Text className="text-sm" style={{ color: colors.textMuted }}>Tasks</Text>
                 </View>
               </TouchableOpacity>
 
@@ -474,8 +552,8 @@ export default function Profile() {
                   <View className="bg-yellow-50 rounded-full p-3 mb-2">
                     <Ionicons name="people-outline" size={24} color="#EAB308" />
                   </View>
-                  <Text className="text-2xl font-bold text-gray-800">{groupStats.total}</Text>
-                  <Text className="text-sm text-gray-500">Groups</Text>
+                  <Text className="text-2xl font-bold" style={{ color: colors.text }}>{groupStats.total}</Text>
+                  <Text className="text-sm" style={{ color: colors.textMuted }}>Groups</Text>
                 </View>
               </TouchableOpacity>
 
@@ -485,8 +563,8 @@ export default function Profile() {
                   <View className="bg-blue-50 rounded-full p-3 mb-2">
                     <Ionicons name="time-outline" size={24} color="#3B82F6" />
                   </View>
-                  <Text className="text-2xl font-bold text-gray-800">{taskStats.inProgress}</Text>
-                  <Text className="text-sm text-gray-500">In Progress</Text>
+                  <Text className="text-2xl font-bold" style={{ color: colors.text }}>{taskStats.inProgress}</Text>
+                  <Text className="text-sm" style={{ color: colors.textMuted }}>In Progress</Text>
                 </View>
               </View>
 
@@ -496,8 +574,8 @@ export default function Profile() {
                   <View className="bg-green-50 rounded-full p-3 mb-2">
                     <Ionicons name="checkmark-done-circle-outline" size={24} color="#10B981" />
                   </View>
-                  <Text className="text-2xl font-bold text-gray-800">{taskStats.completionRate}%</Text>
-                  <Text className="text-sm text-gray-500">Complete</Text>
+                  <Text className="text-2xl font-bold" style={{ color: colors.text }}>{taskStats.completionRate}%</Text>
+                  <Text className="text-sm" style={{ color: colors.textMuted }}>Complete</Text>
                 </View>
               </View>
             </View>
@@ -506,14 +584,15 @@ export default function Profile() {
 
         {/* Account Section */}
         <View className="px-5 mt-6">
-          <Text className="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-3 px-1">
+          <Text className="text-xs font-semibold uppercase tracking-wide mb-3 px-1" style={{ color: colors.textSoft }}>
             Account
           </Text>
 
-          <View className="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100 mb-4">
+          <View className="rounded-xl overflow-hidden shadow-sm border mb-4" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
             {/* Edit Profile - Now first in Account section */}
             <TouchableOpacity
-              className="flex-row items-center justify-between p-4 border-b border-gray-100"
+              className="flex-row items-center justify-between p-4 border-b"
+              style={{ borderBottomColor: colors.border }}
               onPress={() => {
                 setTempName(userName);
                 setTempEmail(userEmail);
@@ -524,46 +603,64 @@ export default function Profile() {
             >
               <View className="flex-row items-center">
                 <Ionicons name="create-outline" size={22} color="#EAB308" />
-                <Text className="text-gray-700 ml-3">Edit Profile</Text>
+                <Text className="ml-3" style={{ color: colors.text }}>Edit Profile</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+              <Ionicons name="chevron-forward" size={20} color={colors.textSoft} />
             </TouchableOpacity>
 
             {/* Change Password */}
             <TouchableOpacity
-              className="flex-row items-center justify-between p-4 border-b border-gray-100"
+              className="flex-row items-center justify-between p-4 border-b"
+              style={{ borderBottomColor: colors.border }}
               onPress={() => router.push("/change-password")}
             >
               <View className="flex-row items-center">
                 <Ionicons name="key-outline" size={22} color="#4B7BEC" />
-                <Text className="text-gray-700 ml-3">Change Password</Text>
+                <Text className="ml-3" style={{ color: colors.text }}>Change Password</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+              <Ionicons name="chevron-forward" size={20} color={colors.textSoft} />
             </TouchableOpacity>
 
-           
+            <View className="flex-row items-center justify-between p-4 border-b" style={{ borderBottomColor: colors.border }}>
+              <View className="flex-row items-center flex-1 mr-4">
+                <Ionicons name={isDark ? "moon" : "moon-outline"} size={22} color="#4B7BEC" />
+                <View className="ml-3 flex-1">
+                  <Text style={{ color: colors.text }}>Dark Mode</Text>
+                  <Text className="text-xs" style={{ color: colors.textSoft }}>
+                    Switch between light and dark color schemes
+                  </Text>
+                </View>
+              </View>
+              <Switch
+                value={isDark}
+                onValueChange={toggleTheme}
+                trackColor={{ false: "#D1D5DB", true: "#60A5FA" }}
+                thumbColor={isDark ? "#DBEAFE" : "#FFFFFF"}
+              />
+            </View>
+
             {/* Delete Account */}
             <TouchableOpacity className="flex-row items-center justify-between p-4">
               <View className="flex-row items-center">
                 <Ionicons name="trash-outline" size={22} color="#EF4444" />
                 <Text className="text-red-500 ml-3">Delete Account</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+              <Ionicons name="chevron-forward" size={20} color={colors.textSoft} />
             </TouchableOpacity>
           </View>
         </View>
 
         {/* About Section */}
         <View className="px-5 mt-2 mb-8">
-          <View className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 items-center">
-            <Text className="text-gray-500 text-sm">Version 1.0.0</Text>
+          <View className="rounded-xl p-4 shadow-sm border items-center" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
+            <Text className="text-sm" style={{ color: colors.textMuted }}>Version 1.0.0</Text>
             <Text className="text-gray-400 text-xs mt-1">© 2026 Cohera</Text>
           </View>
         </View>
       </ScrollView>
 
       {/* Sign Out Button */}
-      <View className="bg-white border-t border-gray-100 px-5 py-4">
+      <View className="border-t px-5 py-4" style={{ backgroundColor: colors.surface, borderTopColor: colors.border }}>
         <TouchableOpacity
           onPress={handleSignOut}
           className="bg-red-500 rounded-xl p-4 items-center justify-center shadow-sm"
@@ -575,6 +672,58 @@ export default function Profile() {
           </View>
         </TouchableOpacity>
       </View>
+
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={showSignOutModal}
+        onRequestClose={() => {
+          if (!isSigningOut) {
+            setShowSignOutModal(false);
+          }
+        }}
+      >
+        <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: colors.overlay }}>
+          <View className="w-full max-w-sm rounded-3xl p-6 shadow-lg" style={{ backgroundColor: colors.surface }}>
+            <View className="items-center mb-5">
+              <View className="rounded-full p-4 mb-4" style={{ backgroundColor: isDark ? colors.dangerSoft : '#FEE2E2' }}>
+                <Ionicons name="log-out-outline" size={28} color="#EF4444" />
+              </View>
+              <Text className="text-xl font-bold mb-2" style={{ color: colors.text }}>Confirm Sign Out</Text>
+              <Text className="text-center" style={{ color: colors.textMuted }}>
+                Do you want to sign out and go back to the login screen?
+              </Text>
+            </View>
+
+            <View className="flex-row gap-3">
+              <TouchableOpacity
+                onPress={() => setShowSignOutModal(false)}
+                disabled={isSigningOut}
+                className="flex-1 rounded-2xl border py-3 items-center"
+                style={{ borderColor: colors.border }}
+                activeOpacity={0.8}
+              >
+                <Text className="font-semibold" style={{ color: colors.textMuted }}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={confirmSignOut}
+                disabled={isSigningOut}
+                className={`flex-1 rounded-2xl py-3 items-center ${
+                  isSigningOut ? "bg-red-300" : "bg-red-500"
+                }`}
+                activeOpacity={0.8}
+              >
+                {isSigningOut ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text className="font-semibold text-white">Yes, Sign Out</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Edit Profile Modal */}
       <Modal
@@ -588,10 +737,10 @@ export default function Profile() {
           setOtpSent(false);
         }}
       >
-        <View className="flex-1 bg-black/50 justify-end">
-          <View className="bg-white rounded-t-3xl">
+        <View className="flex-1 justify-end" style={{ backgroundColor: colors.overlay }}>
+          <View className="rounded-t-3xl" style={{ backgroundColor: colors.surface }}>
             {/* Modal Header */}
-            <View className="flex-row justify-between items-center p-5 border-b border-gray-100">
+            <View className="flex-row justify-between items-center p-5 border-b" style={{ borderBottomColor: colors.border }}>
               <TouchableOpacity 
                 onPress={() => {
                   setShowEditModal(false);
@@ -601,9 +750,9 @@ export default function Profile() {
                 }} 
                 activeOpacity={0.7}
               >
-                <Text className="text-gray-500 text-base">Cancel</Text>
+                <Text className="text-base" style={{ color: colors.textMuted }}>Cancel</Text>
               </TouchableOpacity>
-              <Text className="text-lg font-semibold text-gray-800">Edit Profile</Text>
+              <Text className="text-lg font-semibold" style={{ color: colors.text }}>Edit Profile</Text>
               <TouchableOpacity onPress={handleSaveProfile} activeOpacity={0.7}>
                 <Text className="text-yellow-500 text-base font-semibold">Save</Text>
               </TouchableOpacity>
@@ -635,10 +784,11 @@ export default function Profile() {
 
               {/* Name Input */}
               <View className="mb-4">
-                <Text className="text-gray-700 text-sm font-medium mb-2">Full Name</Text>
+                <Text className="text-sm font-medium mb-2" style={{ color: colors.text }}>Full Name</Text>
                 <View className="flex-row items-center">
                   <TextInput
-                    className="bg-gray-50 rounded-xl p-3 text-gray-800 border border-gray-200 flex-1"
+                    className="rounded-xl p-3 border flex-1"
+                    style={{ backgroundColor: colors.surfaceMuted, color: colors.text, borderColor: colors.border }}
                     value={tempName}
                     onChangeText={setTempName}
                     placeholder="Enter your name"
@@ -661,9 +811,10 @@ export default function Profile() {
 
               {/* Title Input */}
               <View className="mb-4">
-                <Text className="text-gray-700 text-sm font-medium mb-2">Title / Role</Text>
+                <Text className="text-sm font-medium mb-2" style={{ color: colors.text }}>Title / Role</Text>
                 <TextInput
-                  className="bg-gray-50 rounded-xl p-3 text-gray-800 border border-gray-200"
+                  className="rounded-xl p-3 border"
+                  style={{ backgroundColor: colors.surfaceMuted, color: colors.text, borderColor: colors.border }}
                   value={tempTitle}
                   onChangeText={setTempTitle}
                   placeholder="Enter your title"
@@ -673,9 +824,10 @@ export default function Profile() {
 
               {/* Email Section */}
               <View className="mb-4">
-                <Text className="text-gray-700 text-sm font-medium mb-2">Email</Text>
+                <Text className="text-sm font-medium mb-2" style={{ color: colors.text }}>Email</Text>
                 <TextInput
-                  className="bg-gray-50 rounded-xl p-3 text-gray-800 border border-gray-200"
+                  className="rounded-xl p-3 border"
+                  style={{ backgroundColor: colors.surfaceMuted, color: colors.text, borderColor: colors.border }}
                   value={tempEmail}
                   onChangeText={setTempEmail}
                   placeholder="Enter your email"
@@ -700,8 +852,8 @@ export default function Profile() {
                 {/* Re-authentication Section */}
                 {isEmailChanging && isReauthenticating && !otpSent && (
                   <View className="mt-2">
-                    <Text className="text-gray-700 text-xs mb-2 font-semibold">Verify your identity</Text>
-                    <Text className="text-gray-500 text-xs mb-2">For security, please verify your identity before changing your email.</Text>
+                    <Text className="text-xs mb-2 font-semibold" style={{ color: colors.text }}>Verify your identity</Text>
+                    <Text className="text-xs mb-2" style={{ color: colors.textMuted }}>For security, please verify your identity before changing your email.</Text>
                     
                     <View className="flex-row mb-2">
                       <TouchableOpacity
@@ -728,7 +880,8 @@ export default function Profile() {
 
                     {reauthMethod === "password" && (
                       <TextInput
-                        className="bg-gray-50 rounded-xl p-3 text-gray-800 border border-gray-200 mb-2"
+                        className="rounded-xl p-3 border mb-2"
+                        style={{ backgroundColor: colors.surfaceMuted, color: colors.text, borderColor: colors.border }}
                         value={reauthValue}
                         onChangeText={setReauthValue}
                         placeholder="Enter your password"

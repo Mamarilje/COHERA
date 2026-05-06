@@ -10,7 +10,7 @@ export default function Splash() {
       <View className="items-center">
         <Image
           source={require("@/assets/images/logo.png")}
-          className="w-40 h-40 mb-8"
+          className="w-80 h-80 mb-8"
           resizeMode="contain"
         />
 

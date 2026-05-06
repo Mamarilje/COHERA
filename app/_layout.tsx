@@ -4,6 +4,7 @@ import { Stack } from 'expo-router';
 import { useEffect } from 'react';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { useRouter, useSegments } from 'expo-router';
+import { AppThemeProvider } from '../src/theme/AppThemeContext';
 
 export default function RootLayout() {
   const router = useRouter();
@@ -33,15 +34,17 @@ export default function RootLayout() {
   }, [segments, router]);
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="index" />
-      <Stack.Screen name="login" />
-      <Stack.Screen name="register" />
-      <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="create-group" />
-      <Stack.Screen name="group-details" />
-      <Stack.Screen name="all-groups" />
-      <Stack.Screen name="notifications" />
-    </Stack>
+    <AppThemeProvider>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="login" />
+        <Stack.Screen name="register" />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="create-group" />
+        <Stack.Screen name="group-details" />
+        <Stack.Screen name="all-groups" />
+        <Stack.Screen name="notifications" />
+      </Stack>
+    </AppThemeProvider>
   );
 }

@@ -20,8 +20,10 @@ import {
   updateDoc,
   doc,
   deleteDoc,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../src/Firebase/firebaseConfig";
+import { useAppTheme } from "../src/theme/AppThemeContext";
 
 interface Notification {
   id: string;
@@ -41,11 +43,13 @@ interface Notification {
 export default function Notifications() {
   const router = useRouter();
   const auth = getAuth();
+  const { colors } = useAppTheme();
   const user = auth.currentUser;
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
 
   const fetchNotifications = async () => {
     if (!user) {
@@ -103,6 +107,35 @@ export default function Notifications() {
       );
     } catch (error) {
       console.error("Error marking notification as read:", error);
+    }
+  };
+
+  const markAllAsRead = async () => {
+    const unreadNotifications = notifications.filter((notification) => !notification.read);
+
+    if (unreadNotifications.length === 0 || isMarkingAllRead) {
+      return;
+    }
+
+    try {
+      setIsMarkingAllRead(true);
+      const batch = writeBatch(db);
+
+      unreadNotifications.forEach((notification) => {
+        batch.update(doc(db, "notifications", notification.id), {
+          read: true,
+        });
+      });
+
+      await batch.commit();
+      setNotifications((prev) =>
+        prev.map((notification) => ({ ...notification, read: true }))
+      );
+    } catch (error) {
+      console.error("Error marking all notifications as read:", error);
+      Alert.alert("Error", "Failed to mark all notifications as read");
+    } finally {
+      setIsMarkingAllRead(false);
     }
   };
 
@@ -171,6 +204,8 @@ export default function Notifications() {
         return <Ionicons name="close-circle-outline" size={20} color="#EF4444" />;
       case "kicked_from_group":
         return <Ionicons name="exit-outline" size={20} color="#EF4444" />;
+      case "promoted_to_admin":
+        return <Ionicons name="shield-checkmark-outline" size={20} color="#2563EB" />;
       default:
         return <Ionicons name="notifications-outline" size={20} color="#9CA3AF" />;
     }
@@ -178,20 +213,45 @@ export default function Notifications() {
 
   if (isLoading) {
     return (
-      <View className="flex-1 bg-gray-100 items-center justify-center">
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
         <ActivityIndicator size="large" color="#F59E0B" />
       </View>
     );
   }
 
+  const unreadCount = notifications.filter((notification) => !notification.read).length;
+
   return (
-    <View className="flex-1 bg-gray-100">
+    <View className="flex-1" style={{ backgroundColor: colors.background }}>
       {/* Header */}
-      <View className="bg-white px-5 pt-12 pb-4 flex-row items-center border-b border-gray-200">
-        <TouchableOpacity onPress={() => router.back()} className="mr-4">
-          <Ionicons name="arrow-back" size={24} color="#333" />
-        </TouchableOpacity>
-        <Text className="text-xl font-bold text-gray-800">Notifications</Text>
+      <View className="px-5 pt-12 pb-4 border-b" style={{ backgroundColor: colors.surface, borderBottomColor: colors.border }}>
+        <View className="flex-row items-center justify-between">
+          <View className="flex-row items-center flex-1">
+            <TouchableOpacity onPress={() => router.back()} className="mr-4">
+              <Ionicons name="arrow-back" size={24} color={colors.text} />
+            </TouchableOpacity>
+            <Text className="text-xl font-bold" style={{ color: colors.text }}>Notifications</Text>
+          </View>
+          <TouchableOpacity
+            onPress={markAllAsRead}
+            disabled={unreadCount === 0 || isMarkingAllRead}
+            className={`px-3 py-2 rounded-full ${
+              unreadCount === 0 || isMarkingAllRead ? "bg-gray-100" : "bg-yellow-100"
+            }`}
+          >
+            {isMarkingAllRead ? (
+              <ActivityIndicator size="small" color="#D97706" />
+            ) : (
+              <Text
+                className={`text-sm font-semibold ${
+                  unreadCount === 0 ? "text-gray-400" : "text-amber-600"
+                }`}
+              >
+                Read All
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -211,11 +271,8 @@ export default function Notifications() {
               onPress={() => handleNotificationPress(notification)}
               onLongPress={() => deleteNotification(notification.id)}
               activeOpacity={0.7}
-              className={`bg-white rounded-xl p-4 mb-3 shadow-sm border-l-4 ${
-                notification.read
-                  ? "border-l-gray-300 opacity-70"
-                  : "border-l-yellow-400"
-              }`}
+              className={`rounded-xl p-4 mb-3 shadow-sm border-l-4 ${notification.read ? "opacity-70" : ""}`}
+              style={{ backgroundColor: colors.surface, borderLeftColor: notification.read ? colors.border : '#FACC15' }}
             >
               <View className="flex-row items-start justify-between">
                 <View className="flex-row items-start flex-1">
@@ -224,18 +281,15 @@ export default function Notifications() {
                   </View>
                   <View className="flex-1">
                     <Text
-                      className={`font-semibold ${
-                        notification.read
-                          ? "text-gray-600"
-                          : "text-gray-800"
-                      }`}
+                      className="font-semibold"
+                      style={{ color: notification.read ? colors.textMuted : colors.text }}
                     >
                       {notification.title}
                     </Text>
-                    <Text className="text-gray-500 text-sm mt-1 leading-5">
+                    <Text className="text-sm mt-1 leading-5" style={{ color: colors.textMuted }}>
                       {notification.message}
                     </Text>
-                    <Text className="text-gray-400 text-xs mt-2">
+                    <Text className="text-xs mt-2" style={{ color: colors.textSoft }}>
                       {formatTime(notification.createdAt)}
                     </Text>
                   </View>
@@ -244,15 +298,15 @@ export default function Notifications() {
                   onPress={() => deleteNotification(notification.id)}
                   className="ml-2"
                 >
-                  <Ionicons name="close-circle-outline" size={20} color="#9CA3AF" />
+                  <Ionicons name="close-circle-outline" size={20} color={colors.textSoft} />
                 </TouchableOpacity>
               </View>
             </TouchableOpacity>
           ))
         ) : (
           <View className="items-center justify-center py-10">
-            <Ionicons name="notifications-off-outline" size={50} color="#ccc" />
-            <Text className="text-gray-400 mt-3">No notifications yet</Text>
+            <Ionicons name="notifications-off-outline" size={50} color={colors.textSoft} />
+            <Text className="mt-3" style={{ color: colors.textSoft }}>No notifications yet</Text>
           </View>
         )}
       </ScrollView>

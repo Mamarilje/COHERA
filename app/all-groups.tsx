@@ -12,6 +12,7 @@ import { useRouter } from 'expo-router';
 import { getAuth } from 'firebase/auth';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../src/Firebase/firebaseConfig';
+import { useAppTheme } from '../src/theme/AppThemeContext';
 
 type Group = {
   id: string;
@@ -26,6 +27,7 @@ type Group = {
 export default function AllGroups() {
   const router = useRouter();
   const auth = getAuth();
+  const { colors, isDark } = useAppTheme();
   const user = auth.currentUser;
   const [groups, setGroups] = useState<Group[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -93,7 +95,8 @@ export default function AllGroups() {
 
   return (
     <ScrollView 
-      className="flex-1 bg-gray-100"
+      className="flex-1"
+      style={{ backgroundColor: colors.background }}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#F59E0B']} />
       }
@@ -102,16 +105,16 @@ export default function AllGroups() {
         {/* Header */}
         <View className="flex-row items-center mb-6">
           <TouchableOpacity onPress={() => router.back()} className="mr-4">
-            <Ionicons name="arrow-back" size={24} color="#333" />
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
-          <Text className="text-2xl font-bold text-gray-800">All Groups</Text>
+          <Text className="text-2xl font-bold" style={{ color: colors.text }}>All Groups</Text>
         </View>
 
         {groups.length === 0 ? (
-          <View className="bg-white rounded-xl p-12 items-center">
-            <Ionicons name="people-outline" size={64} color="#D1D5DB" />
-            <Text className="text-gray-400 text-center mt-4">No groups yet</Text>
-            <Text className="text-gray-300 text-center text-sm mt-2">
+          <View className="rounded-xl p-12 items-center" style={{ backgroundColor: colors.surface }}>
+            <Ionicons name="people-outline" size={64} color={colors.textSoft} />
+            <Text className="text-center mt-4" style={{ color: colors.textSoft }}>No groups yet</Text>
+            <Text className="text-center text-sm mt-2" style={{ color: colors.textMuted }}>
               Create a group to get started
             </Text>
             <TouchableOpacity
@@ -126,22 +129,23 @@ export default function AllGroups() {
             <TouchableOpacity
               key={group.id}
               onPress={() => handleGroupPress(group.id, group.name)}
-              className="bg-white rounded-xl p-4 mb-3 shadow-sm border border-gray-100"
+              className="rounded-xl p-4 mb-3 shadow-sm border"
+              style={{ backgroundColor: colors.surface, borderColor: colors.border }}
               activeOpacity={0.8}
             >
               <View className="flex-row items-center">
                 <Image source={{ uri: group.icon }} className="w-12 h-12 rounded-full" />
                 <View className="flex-1 ml-3">
-                  <Text className="font-semibold text-gray-800 text-lg">{group.name}</Text>
+                  <Text className="font-semibold text-lg" style={{ color: colors.text }}>{group.name}</Text>
                   <View className="flex-row items-center mt-1">
-                    <View className="bg-orange-100 px-2 py-0.5 rounded-full">
+                    <View className="px-2 py-0.5 rounded-full" style={{ backgroundColor: isDark ? colors.accentSoft : '#FFEDD5' }}>
                       <Text className="text-xs text-orange-600">{group.category}</Text>
                     </View>
-                    <Text className="text-xs text-gray-400 ml-2">{group.members.length} members</Text>
+                    <Text className="text-xs ml-2" style={{ color: colors.textSoft }}>{group.members.length} members</Text>
                   </View>
-                  <Text className="text-xs text-gray-400 mt-1">Code: {group.code}</Text>
+                  <Text className="text-xs mt-1" style={{ color: colors.textSoft }}>Code: {group.code}</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+                <Ionicons name="chevron-forward" size={20} color={colors.textSoft} />
               </View>
             </TouchableOpacity>
           ))

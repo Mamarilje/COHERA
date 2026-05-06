@@ -16,6 +16,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { useAppTheme } from "@/src/theme/AppThemeContext";
 
 type CheckItemProps = {
   met: boolean;
@@ -38,6 +39,7 @@ function CheckItem({ met, label }: CheckItemProps) {
 }
 
 export default function Register() {
+  const { colors } = useAppTheme();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -204,18 +206,18 @@ export default function Register() {
   // ✅ Email verification waiting screen
   if (awaitingVerification) {
     return (
-      <View className="flex-1 justify-center px-6 bg-white">
-        <Text className="text-3xl font-bold text-center mb-4">
+      <View className="flex-1 justify-center px-6" style={{ backgroundColor: colors.background }}>
+        <Text className="text-3xl font-bold text-center mb-4" style={{ color: colors.text }}>
           Verify Your Email
         </Text>
-        <Text className="text-center text-gray-500 mb-2">
+        <Text className="text-center mb-2" style={{ color: colors.textMuted }}>
           A verification link has been sent to:
         </Text>
-        <Text className="text-center font-semibold text-black mb-8">
+        <Text className="text-center font-semibold mb-8" style={{ color: colors.text }}>
           {email}
         </Text>
 
-        <View className="bg-yellow-50 border border-yellow-300 rounded-xl p-4 mb-8">
+        <View className="border rounded-xl p-4 mb-8" style={{ backgroundColor: colors.accentSoft, borderColor: colors.border }}>
           <Text className="text-yellow-800 text-sm text-center">
             Please check your inbox and click the verification link. This screen
             will automatically continue once verified.
@@ -237,7 +239,7 @@ export default function Register() {
         </Pressable>
 
         <Pressable onPress={handleCancelVerification}>
-          <Text className="text-center text-gray-500">
+          <Text className="text-center" style={{ color: colors.textMuted }}>
             Cancel & Back to Registration
           </Text>
         </Pressable>
@@ -246,8 +248,8 @@ export default function Register() {
   }
 
   return (
-    <View className="flex-1 justify-center px-6 bg-white">
-      <Text className="text-3xl font-bold text-center mb-10">Register</Text>
+    <View className="flex-1 justify-center px-6" style={{ backgroundColor: colors.background }}>
+      <Text className="text-3xl font-bold text-center mb-10" style={{ color: colors.text }}>Register</Text>
 
       {error ? (
         <Text className="text-red-500 text-center mb-4">{error}</Text>
@@ -259,7 +261,9 @@ export default function Register() {
         value={name}
         onChangeText={setName}
         editable={!loading}
-        className="border p-4 rounded-xl border-gray-300"
+        className="border p-4 rounded-xl"
+        style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+        placeholderTextColor={colors.textSoft}
       />
       <View className="px-1 pt-1 mb-4">
         <CheckItem met={nameFilled} label="Full name is filled in" />
@@ -273,7 +277,9 @@ export default function Register() {
         editable={!loading}
         autoCapitalize="none"
         keyboardType="email-address"
-        className="border p-4 rounded-xl border-gray-300"
+        className="border p-4 rounded-xl"
+        style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+        placeholderTextColor={colors.textSoft}
       />
       <View className="px-1 pt-1 mb-4">
         <CheckItem met={emailFilled} label="Email is filled in" />
@@ -290,7 +296,9 @@ export default function Register() {
         onChangeText={setPassword}
         editable={!loading}
         secureTextEntry
-        className="border p-4 rounded-xl border-gray-300"
+        className="border p-4 rounded-xl"
+        style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+        placeholderTextColor={colors.textSoft}
       />
       <View className="px-1 pt-1 mb-4">
         <CheckItem met={passwordLongEnough} label="At least 8 characters" />
@@ -317,7 +325,9 @@ export default function Register() {
         onChangeText={setConfirmPassword}
         editable={!loading}
         secureTextEntry
-        className="border p-4 rounded-xl border-gray-300"
+        className="border p-4 rounded-xl"
+        style={{ backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }}
+        placeholderTextColor={colors.textSoft}
       />
       <View className="px-1 pt-1 mb-6">
         <CheckItem
@@ -348,7 +358,7 @@ export default function Register() {
       </Pressable>
 
       <Pressable onPress={() => router.back()} disabled={loading}>
-        <Text className="text-center text-gray-500">
+        <Text className="text-center" style={{ color: colors.textMuted }}>
           Already have an account? Login
         </Text>
       </Pressable>

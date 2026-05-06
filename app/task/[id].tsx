@@ -35,6 +35,7 @@ import {
 import { db } from '../../src/Firebase/firebaseConfig';
 import { supabase } from '../../src/Supabase/supabaseConfig';
 import { firestore } from '../../src/Firebase/firebaseConfig';
+import { useAppTheme } from '../../src/theme/AppThemeContext';
 import {
   notifyAdminMemberSubmitted,
   notifyAdminMemberCommented,
@@ -102,6 +103,7 @@ export default function TaskDetail() {
   const router = useRouter();
   const { id } = useLocalSearchParams();
   const auth = getAuth();
+  const { colors, isDark } = useAppTheme();
   const currentUser = auth.currentUser;
 
   const [task, setTask] = useState<Task | null>(null);
@@ -1108,7 +1110,7 @@ export default function TaskDetail() {
     
     const parts = description.split(/(@\w+)/g);
     return (
-      <Text className="text-gray-700 leading-5">
+      <Text className="leading-5" style={{ color: colors.text }}>
         {parts.map((part, index) => {
           if (part.startsWith('@')) {
             return (
@@ -1140,7 +1142,7 @@ export default function TaskDetail() {
 
   if (isLoading) {
     return (
-      <View className="flex-1 bg-gray-100 items-center justify-center">
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
         <ActivityIndicator size="large" color="#F59E0B" />
       </View>
     );
@@ -1148,22 +1150,22 @@ export default function TaskDetail() {
 
   if (!task) {
     return (
-      <View className="flex-1 bg-gray-100 items-center justify-center">
-        <Text className="text-gray-500">Task not found</Text>
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
+        <Text style={{ color: colors.textMuted }}>Task not found</Text>
       </View>
     );
   }
 
   return (
-    <View className="flex-1 bg-gray-100">
+    <View className="flex-1" style={{ backgroundColor: colors.background }}>
       <ScrollView className="flex-1">
         <View className="px-5 pt-12 pb-20">
           {/* Header */}
           <View className="flex-row items-center justify-between mb-6">
             <TouchableOpacity onPress={() => router.back()} className="mr-4">
-              <Ionicons name="arrow-back" size={24} color="#333" />
+              <Ionicons name="arrow-back" size={24} color={colors.text} />
             </TouchableOpacity>
-            <Text className="text-xl font-bold text-gray-800 flex-1" numberOfLines={1}>
+            <Text className="text-xl font-bold flex-1" style={{ color: colors.text }} numberOfLines={1}>
               Task Details
             </Text>
             <TouchableOpacity onPress={handleEditPress} className="mr-3">
@@ -1175,7 +1177,7 @@ export default function TaskDetail() {
           </View>
 
           {/* Task Card */}
-          <View className="bg-white rounded-2xl p-6 mb-6 shadow-sm">
+          <View className="rounded-2xl p-6 mb-6 shadow-sm" style={{ backgroundColor: colors.surface }}>
             {showOverloadWarning && (
               <View className="bg-red-50 border-l-4 border-red-500 rounded-lg p-4 mb-4">
                 <View className="flex-row items-start gap-3">
@@ -1198,7 +1200,7 @@ export default function TaskDetail() {
                       <Ionicons name="checkmark-circle" size={24} color="#22C55E" />
                     </View>
                   )}
-                  <Text className={`text-2xl font-bold flex-1 ${task.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                  <Text className={`text-2xl font-bold flex-1 ${task.completed ? 'line-through' : ''}`} style={{ color: task.completed ? colors.textSoft : colors.text }}>
                     {task.title}
                   </Text>
                 </View>
@@ -1230,10 +1232,10 @@ export default function TaskDetail() {
 
             <View className="border-t border-gray-100 pt-4 mb-4">
               <View className="flex-row items-center mb-2">
-                <Ionicons name="calendar-outline" size={18} color="#6B7280" />
-                <Text className="text-gray-600 ml-2 font-semibold">Due Date</Text>
+                <Ionicons name="calendar-outline" size={18} color={colors.textMuted} />
+                <Text className="ml-2 font-semibold" style={{ color: colors.textMuted }}>Due Date</Text>
               </View>
-              <Text className="text-gray-800 text-base">
+              <Text className="text-base" style={{ color: colors.text }}>
                 {new Date(task.deadline).toLocaleString('en-US', {
                   weekday: 'long',
                   year: 'numeric',
@@ -1247,10 +1249,10 @@ export default function TaskDetail() {
 
             <View className="border-t border-gray-100 pt-4 mb-4">
               <View className="flex-row items-center mb-2">
-                <Ionicons name="person-outline" size={18} color="#6B7280" />
-                <Text className="text-gray-600 ml-2 font-semibold">Created by</Text>
+                <Ionicons name="person-outline" size={18} color={colors.textMuted} />
+                <Text className="ml-2 font-semibold" style={{ color: colors.textMuted }}>Created by</Text>
               </View>
-              <Text className="text-gray-800">
+              <Text style={{ color: colors.text }}>
                 {typeof (task as any).creatorName === 'string' ? (task as any).creatorName : 'Unknown'} • {(() => {
                   try {
                     const date = task.createdAt?.toDate ? task.createdAt.toDate() : new Date(task.createdAt);
@@ -1266,7 +1268,7 @@ export default function TaskDetail() {
               <View className="border-t border-gray-100 pt-4 mb-4">
                 <View className="flex-row items-center mb-3">
                   <Ionicons name="people-outline" size={18} color="#6B7280" />
-                  <Text className="text-gray-600 ml-2 font-semibold">Assigned to ({task.assignedTo.length})</Text>
+                  <Text className="ml-2 font-semibold" style={{ color: colors.text }}>Assigned to ({task.assignedTo.length})</Text>
                 </View>
                 <View className="gap-2">
                   {members
@@ -1288,9 +1290,9 @@ export default function TaskDetail() {
                             </View>
                           )}
                           <View className="flex-1">
-                            <Text className="font-semibold text-gray-800">{member.name}</Text>
+                            <Text className="font-semibold" style={{ color: isDark ? '#111111' : colors.text }}>{member.name}</Text>
                             {member.email && (
-                              <Text className="text-xs text-gray-500">{member.email}</Text>
+                              <Text className="text-xs" style={{ color: colors.textMuted }}>{member.email}</Text>
                             )}
                           </View>
                           <View className={`px-3 py-1 rounded-full flex-row items-center gap-1 ${isCompleted ? 'bg-green-100' : 'bg-yellow-100'}`}>
@@ -1312,7 +1314,7 @@ export default function TaskDetail() {
 
             {task.description ? (
               <View className="border-t border-gray-100 pt-4 mb-4">
-                <Text className="text-gray-600 font-semibold mb-2">Description</Text>
+                <Text className="font-semibold mb-2" style={{ color: colors.textMuted }}>Description</Text>
                 <View>
                   {renderDescriptionWithMentions(task.description)}
                 </View>
@@ -1321,7 +1323,7 @@ export default function TaskDetail() {
 
             {task.fileUrls && task.fileUrls.length > 0 && (
               <View className="border-t border-gray-100 pt-4">
-                <Text className="text-gray-600 font-semibold mb-3">
+                <Text className="font-semibold mb-3" style={{ color: colors.textMuted }}>
                   Attachments ({task.fileUrls.length})
                 </Text>
                 {task.fileUrls.map((url, index) => {
@@ -1333,21 +1335,22 @@ export default function TaskDetail() {
                       key={index}
                       onPress={() => downloadFile(url, fileName)}
                       disabled={isDownloading}
-                      className={`bg-gray-50 rounded-xl p-3 mb-2 flex-row items-center ${
+                      className={`rounded-xl p-3 mb-2 flex-row items-center ${
                         isDownloading ? 'opacity-70' : ''
                       }`}
+                      style={{ backgroundColor: colors.surface }}
                     >
                       {isDownloading ? (
                         <ActivityIndicator size="small" color="#EAB308" />
                       ) : (
                         getFileIcon(fileName, false)
                       )}
-                      <Text className="text-gray-700 ml-2 flex-1" numberOfLines={1}>
+                      <Text className="ml-2 flex-1" numberOfLines={1} style={{ color: colors.text }}>
                         {fileName}
                       </Text>
                       <View className="flex-row items-center">
                         {!isDownloading && (
-                          <Ionicons name="open-outline" size={18} color="#6B7280" />
+                          <Ionicons name="open-outline" size={18} color={colors.textMuted} />
                         )}
                       </View>
                     </TouchableOpacity>
@@ -1358,8 +1361,8 @@ export default function TaskDetail() {
           </View>
 
           {/* Submissions and Discussion Tabs */}
-          <View className="bg-white rounded-2xl p-6 shadow-sm">
-            <View className="flex-row border-b border-gray-200 mb-4">
+          <View className="rounded-2xl p-6 shadow-sm" style={{ backgroundColor: colors.surface }}>
+            <View className="flex-row border-b mb-4" style={{ borderBottomColor: colors.border }}>
               <TouchableOpacity
                 onPress={() => setActiveTab('submissions')}
                 className={`flex-1 pb-3 border-b-2 ${activeTab === 'submissions' ? 'border-yellow-400' : 'border-transparent'}`}
@@ -1392,7 +1395,7 @@ export default function TaskDetail() {
                   <Text className="text-gray-400 text-center py-4">No submissions yet</Text>
                 ) : (
                   submissions.map((submission) => (
-                    <View key={submission.id} className="bg-gray-50 rounded-xl p-4 mb-3 border border-gray-200">
+                    <View key={submission.id} className="rounded-xl p-4 mb-3 border" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
                       <View className="flex-row items-center justify-between mb-3 pb-3 border-b border-gray-200">
                         <View className="flex-row items-center flex-1">
                           {submission.profileImage ? (
@@ -1408,7 +1411,7 @@ export default function TaskDetail() {
                             </View>
                           )}
                           <View className="flex-1">
-                            <Text className="text-base font-bold text-gray-900">
+                            <Text className="text-base font-bold" style={{ color: colors.text }}>
                               {submission.userName || 'Anonymous'}
                             </Text>
                             <Text className="text-xs text-gray-500 mt-0.5">
@@ -1446,7 +1449,7 @@ export default function TaskDetail() {
                       </View>
 
                       {submission.note && (
-                        <Text className="text-gray-700 mb-2">{submission.note}</Text>
+                        <Text className="mb-2" style={{ color: colors.text }}>{submission.note}</Text>
                       )}
 
                       {submission.link && (
@@ -1533,7 +1536,7 @@ export default function TaskDetail() {
                     <Text className="text-gray-400 text-center py-4">No comments yet</Text>
                   ) : (
                     comments.map((comment) => (
-                      <View key={comment.id} className="bg-gray-50 rounded-xl p-4">
+                      <View key={comment.id} className="rounded-xl p-4" style={{ backgroundColor: colors.surface }}>
                         <View className="flex-row items-center mb-2">
                           <View className="w-8 h-8 bg-yellow-200 rounded-full items-center justify-center mr-2">
                             <Text className="text-yellow-700 font-bold text-sm">
@@ -1541,14 +1544,14 @@ export default function TaskDetail() {
                             </Text>
                           </View>
                           <View className="flex-1">
-                            <Text className="font-semibold text-gray-800">{comment.userName}</Text>
-                            <Text className="text-xs text-gray-400">
+                            <Text className="font-semibold" style={{ color: colors.text }}>{comment.userName}</Text>
+                            <Text className="text-xs" style={{ color: colors.textSoft }}>
                               {new Date(comment.createdAt).toLocaleDateString()} • {new Date(comment.createdAt).toLocaleTimeString()}
                             </Text>
                           </View>
                         </View>
                         {comment.comment ? (
-                          <Text className="text-gray-700 ml-10">{comment.comment}</Text>
+                          <Text className="ml-10" style={{ color: colors.text }}>{comment.comment}</Text>
                         ) : null}
                         
                         {comment.fileUrls && comment.fileUrls.length > 0 && (
@@ -1595,7 +1598,7 @@ export default function TaskDetail() {
                   {commentFiles.length > 0 && (
                     <View className="mb-3">
                       {commentFiles.map((file, index) => (
-                        <View key={index} className="flex-row items-center justify-between bg-gray-50 rounded-lg p-2 mb-1">
+                        <View key={index} className="flex-row items-center justify-between rounded-lg p-2 mb-1" style={{ backgroundColor: colors.surface }}>
                           <View className="flex-row items-center flex-1">
                             <Ionicons name="document-text" size={16} color="#EAB308" />
                             <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
@@ -1669,10 +1672,10 @@ export default function TaskDetail() {
           setReviewNote('');
         }}
       >
-        <View className="flex-1 bg-black/50 justify-end">
-          <View className="bg-white rounded-t-3xl p-6 max-h-[90%]">
+        <View className="flex-1 justify-end" style={{ backgroundColor: colors.overlay }}>
+          <View className="rounded-t-3xl p-6 max-h-[90%]" style={{ backgroundColor: colors.surface }}>
             <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-xl font-bold text-gray-800">Review Submission</Text>
+              <Text className="text-xl font-bold" style={{ color: colors.text }}>Review Submission</Text>
               <TouchableOpacity onPress={() => {
                 setShowReviewModal(false);
                 setSelectedSubmissionForReview(null);
@@ -1685,7 +1688,7 @@ export default function TaskDetail() {
 
             <ScrollView showsVerticalScrollIndicator={false}>
               {selectedSubmissionForReview && (
-                <View className="bg-gray-50 rounded-lg p-4 mb-4">
+                <View className="rounded-lg p-4 mb-4" style={{ backgroundColor: colors.surface }}>
                   <Text className="text-sm text-gray-500 mb-1">Submitted by</Text>
                   <Text className="font-semibold text-gray-800">{selectedSubmissionForReview.userName}</Text>
                   <Text className="text-xs text-gray-400">
@@ -1695,7 +1698,7 @@ export default function TaskDetail() {
               )}
 
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-3">Review Status</Text>
+                <Text className="text-sm font-semibold mb-3" style={{ color: colors.textMuted }}>Review Status</Text>
                 <View className="flex-row gap-3">
                   <TouchableOpacity
                     onPress={() => setReviewStatus('Approved')}
@@ -1719,7 +1722,7 @@ export default function TaskDetail() {
               </View>
 
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Feedback (Optional)</Text>
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>Feedback (Optional)</Text>
                 <TextInput
                   className="border border-gray-300 rounded-lg p-3 h-24"
                   placeholder="Add feedback for the student..."
@@ -1763,10 +1766,10 @@ export default function TaskDetail() {
           setSubmissionPhotos([]);
         }}
       >
-        <View className="flex-1 bg-black/50 justify-end">
-          <View className="bg-white rounded-t-3xl p-6 max-h-[90%]">
+        <View className="flex-1 justify-end" style={{ backgroundColor: colors.overlay }}>
+          <View className="rounded-t-3xl p-6 max-h-[90%]" style={{ backgroundColor: colors.surface }}>
             <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-xl font-bold text-gray-800">Submit Your Work</Text>
+              <Text className="text-xl font-bold" style={{ color: colors.text }}>Submit Your Work</Text>
               <TouchableOpacity onPress={() => {
                 setShowSubmissionModal(false);
                 setSubmissionLink('');
@@ -1781,18 +1784,19 @@ export default function TaskDetail() {
 
             <ScrollView showsVerticalScrollIndicator={false}>
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Link (Optional)</Text>
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>Link (Optional)</Text>
                 <TextInput
                   className="border border-gray-300 rounded-lg p-3"
                   placeholder="https://example.com"
                   value={submissionLink}
                   onChangeText={setSubmissionLink}
                   placeholderTextColor="#9CA3AF"
+                  style={{ color: colors.text }}
                 />
               </View>
 
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Note</Text>
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>Note</Text>
                 <TextInput
                   className="border border-gray-300 rounded-lg p-3 h-24"
                   placeholder="Add a note about your submission..."
@@ -1800,25 +1804,28 @@ export default function TaskDetail() {
                   onChangeText={setSubmissionNote}
                   multiline
                   placeholderTextColor="#9CA3AF"
+                  style={{ color: colors.text }}
                 />
               </View>
 
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Status</Text>
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>Status</Text>
                 <View className="flex-row gap-3">
                   <TouchableOpacity
                     onPress={() => setSubmissionStatus('Progress')}
-                    className={`flex-1 p-3 rounded-lg border ${submissionStatus === 'Progress' ? 'bg-blue-200 border-blue-400' : 'bg-white border-gray-300'}`}
+                    className="flex-1 p-3 rounded-lg border"
+                    style={{ backgroundColor: submissionStatus === 'Progress' ? '#BFDBFE' : colors.surface, borderColor: submissionStatus === 'Progress' ? '#60A5FA' : colors.border }}
                   >
-                    <Text className={`text-center font-semibold ${submissionStatus === 'Progress' ? 'text-blue-700' : 'text-gray-700'}`}>
+                    <Text className="text-center font-semibold" style={{ color: submissionStatus === 'Progress' ? '#1D4ED8' : colors.text }}>
                       Progress
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     onPress={() => setSubmissionStatus('Complete')}
-                    className={`flex-1 p-3 rounded-lg border ${submissionStatus === 'Complete' ? 'bg-green-200 border-green-400' : 'bg-white border-gray-300'}`}
+                    className="flex-1 p-3 rounded-lg border"
+                    style={{ backgroundColor: submissionStatus === 'Complete' ? '#BBF7D0' : colors.surface, borderColor: submissionStatus === 'Complete' ? '#4ADE80' : colors.border }}
                   >
-                    <Text className={`text-center font-semibold ${submissionStatus === 'Complete' ? 'text-green-700' : 'text-gray-700'}`}>
+                    <Text className="text-center font-semibold" style={{ color: submissionStatus === 'Complete' ? '#15803D' : colors.text }}>
                       Complete
                     </Text>
                   </TouchableOpacity>
@@ -1827,8 +1834,8 @@ export default function TaskDetail() {
 
               <View className="mb-4">
                 <View className="flex-row justify-between items-center mb-2">
-                  <Text className="text-sm font-semibold text-gray-700">Files (Optional)</Text>
-                  <Text className="text-xs text-gray-500">{submissionFiles.length} selected</Text>
+                  <Text className="text-sm font-semibold" style={{ color: colors.textMuted }}>Files (Optional)</Text>
+                  <Text className="text-xs" style={{ color: colors.textMuted }}>{submissionFiles.length} selected</Text>
                 </View>
                 <TouchableOpacity
                   onPress={async () => {
@@ -1849,19 +1856,20 @@ export default function TaskDetail() {
                       console.error('Error picking files:', error);
                     }
                   }}
-                  className="border-2 border-dashed border-gray-300 rounded-lg p-4 items-center"
+                  className="border-2 border-dashed rounded-lg p-4 items-center"
+                  style={{ borderColor: colors.border, backgroundColor: colors.surface }}
                 >
                   <Ionicons name="document-attach" size={24} color="#9CA3AF" />
-                  <Text className="text-gray-600 mt-2 text-sm">Tap to add files</Text>
+                  <Text className="mt-2 text-sm" style={{ color: colors.text }}>Tap to add files</Text>
                 </TouchableOpacity>
 
                 {submissionFiles.length > 0 && (
                   <View className="mt-3">
                     {submissionFiles.map((file, index) => (
-                      <View key={index} className="flex-row items-center justify-between bg-gray-50 rounded-lg p-2 mb-1">
+                      <View key={index} className="flex-row items-center justify-between rounded-lg p-2 mb-1" style={{ backgroundColor: colors.surfaceMuted }}>
                         <View className="flex-row items-center flex-1">
                           <Ionicons name="document-text" size={16} color="#EAB308" />
-                          <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
+                          <Text className="text-xs ml-2 flex-1" numberOfLines={1} style={{ color: colors.text }}>
                             {file.name}
                           </Text>
                         </View>
@@ -1876,8 +1884,8 @@ export default function TaskDetail() {
 
               <View className="mb-4">
                 <View className="flex-row justify-between items-center mb-2">
-                  <Text className="text-sm font-semibold text-gray-700">Photos (Optional)</Text>
-                  <Text className="text-xs text-gray-500">{submissionPhotos.length} selected</Text>
+                  <Text className="text-sm font-semibold" style={{ color: colors.textMuted }}>Photos (Optional)</Text>
+                  <Text className="text-xs" style={{ color: colors.textMuted }}>{submissionPhotos.length} selected</Text>
                 </View>
                 <TouchableOpacity
                   onPress={async () => {
@@ -1898,19 +1906,20 @@ export default function TaskDetail() {
                       console.error('Error picking photos:', error);
                     }
                   }}
-                  className="border-2 border-dashed border-gray-300 rounded-lg p-4 items-center"
+                  className="border-2 border-dashed rounded-lg p-4 items-center"
+                  style={{ borderColor: colors.border, backgroundColor: colors.surface }}
                 >
                   <Ionicons name="image" size={24} color="#9CA3AF" />
-                  <Text className="text-gray-600 mt-2 text-sm">Tap to add photos</Text>
+                  <Text className="mt-2 text-sm" style={{ color: colors.text }}>Tap to add photos</Text>
                 </TouchableOpacity>
 
                 {submissionPhotos.length > 0 && (
                   <View className="mt-3">
                     {submissionPhotos.map((photo, index) => (
-                      <View key={index} className="flex-row items-center justify-between bg-gray-50 rounded-lg p-2 mb-1">
+                      <View key={index} className="flex-row items-center justify-between rounded-lg p-2 mb-1" style={{ backgroundColor: colors.surfaceMuted }}>
                         <View className="flex-row items-center flex-1">
                           <Ionicons name="image" size={16} color="#EAB308" />
-                          <Text className="text-xs text-gray-600 ml-2 flex-1" numberOfLines={1}>
+                          <Text className="text-xs ml-2 flex-1" numberOfLines={1} style={{ color: colors.text }}>
                             {photo.name}
                           </Text>
                         </View>
@@ -1948,10 +1957,10 @@ export default function TaskDetail() {
         transparent={true}
         onRequestClose={() => setShowEditModal(false)}
       >
-        <View className="flex-1 bg-black/50 justify-end">
-          <View className="bg-white rounded-t-3xl p-6 max-h-[90%]">
+        <View className="flex-1 justify-end" style={{ backgroundColor: colors.overlay }}>
+          <View className="rounded-t-3xl p-6 max-h-[90%]" style={{ backgroundColor: colors.surface }}>
             <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-xl font-bold text-gray-800">Edit Task</Text>
+              <Text className="text-xl font-bold" style={{ color: colors.text }}>Edit Task</Text>
               <TouchableOpacity onPress={() => setShowEditModal(false)}>
                 <Ionicons name="close" size={24} color="#666" />
               </TouchableOpacity>
@@ -1959,18 +1968,19 @@ export default function TaskDetail() {
 
             <ScrollView showsVerticalScrollIndicator={false}>
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Title</Text>
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>Title</Text>
                 <TextInput
                   className="border border-gray-300 rounded-lg p-3"
                   placeholder="Enter task title"
                   value={editTitle}
                   onChangeText={setEditTitle}
                   placeholderTextColor="#9CA3AF"
+                  style={{ color: colors.text }}
                 />
               </View>
 
               <View className="mb-4 relative">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>
                   Description (Use @ to mention team members)
                 </Text>
                 <TextInput
@@ -1981,10 +1991,11 @@ export default function TaskDetail() {
                   onChangeText={handleDescriptionChange}
                   multiline
                   placeholderTextColor="#9CA3AF"
+                  style={{ color: colors.text }}
                 />
                 
                 {showMentions && members.length > 0 && (
-                  <View className="absolute top-24 left-0 right-0 bg-white rounded-xl shadow-lg border border-gray-100 max-h-64 z-10">
+                  <View className="absolute top-24 left-0 right-0 rounded-xl shadow-lg max-h-64 z-10" style={{ backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 }}>
                     <FlatList
                       data={members.filter(m => !mentionQuery || m.name.toLowerCase().includes(mentionQuery.toLowerCase()) || m.email.toLowerCase().includes(mentionQuery.toLowerCase()))}
                       keyExtractor={(item) => item.uid}
@@ -2001,18 +2012,19 @@ export default function TaskDetail() {
                                 descriptionInputRef.current?.focus();
                               }, 100);
                             }}
-                            className="flex-row items-center px-4 py-3 border-b border-gray-50 active:bg-gray-50"
+                            className="flex-row items-center px-4 py-3 border-b active:bg-gray-50"
+                            style={{ borderBottomColor: colors.border }}
                           >
                             <View className="w-10 h-10 bg-purple-100 rounded-full items-center justify-center mr-3">
                               <Ionicons name="people" size={20} color="#9333EA" />
                             </View>
                             <View className="flex-1">
-                              <Text className="font-semibold text-gray-800 text-base">
-                                Mention everyone in this chat
-                              </Text>
-                              <Text className="text-xs text-gray-400 mt-0.5">
-                                Notify all members
-                              </Text>
+                                <Text className="font-semibold text-base" style={{ color: isDark ? '#111111' : '#1F2937' }}>
+                                  Mention everyone in this chat
+                                </Text>
+                                <Text className="text-xs mt-0.5" style={{ color: colors.textMuted }}>
+                                  Notify all members
+                                </Text>
                             </View>
                             <View className="w-8 h-8 bg-purple-100 rounded-full items-center justify-center ml-2">
                               <Ionicons name="notifications-outline" size={16} color="#9333EA" />
@@ -2032,7 +2044,8 @@ export default function TaskDetail() {
                               descriptionInputRef.current?.focus();
                             }, 100);
                           }}
-                          className="flex-row items-center px-4 py-3 border-b border-gray-50 active:bg-gray-50"
+                          className="flex-row items-center px-4 py-3 border-b active:bg-gray-50"
+                          style={{ borderBottomColor: colors.border }}
                         >
                           {item.profileImage ? (
                             <Image source={{ uri: item.profileImage }} className="w-10 h-10 rounded-full mr-3" />
@@ -2045,11 +2058,11 @@ export default function TaskDetail() {
                           )}
                           
                           <View className="flex-1">
-                            <Text className="font-semibold text-gray-800 text-base">
+                            <Text className="font-semibold text-base" style={{ color: isDark ? '#111111' : colors.text }}>
                               {item.name}
                             </Text>
                             {item.email && (
-                              <Text className="text-xs text-gray-400 mt-0.5" numberOfLines={1}>
+                              <Text className="text-xs mt-0.5" numberOfLines={1} style={{ color: colors.textMuted }}>
                                 {item.email}
                               </Text>
                             )}
@@ -2062,7 +2075,7 @@ export default function TaskDetail() {
                       )}
                       ListEmptyComponent={
                         <View className="p-6 items-center">
-                          <Text className="text-gray-400">No members found</Text>
+                          <Text style={{ color: colors.textMuted }}>No members found</Text>
                         </View>
                       }
                     />
@@ -2072,7 +2085,7 @@ export default function TaskDetail() {
 
               <View className="mb-4">
                 <View className="flex-row justify-between items-center mb-2">
-                  <Text className="text-sm font-semibold text-gray-700">
+                  <Text className="text-sm font-semibold" style={{ color: colors.text }}>
                     Files ({editFiles.length})
                   </Text>
                 </View>
@@ -2097,26 +2110,28 @@ export default function TaskDetail() {
                     }
                   }}
                   className="border-2 border-dashed border-yellow-400 rounded-lg p-4 items-center mb-3"
+                  style={{ backgroundColor: colors.surface }}
                 >
                   <Ionicons name="document-attach" size={24} color="#EAB308" />
                   <Text className="text-sm font-semibold text-yellow-600 mt-2">
                     + Add Files (Optional)
                   </Text>
-                  <Text className="text-xs text-gray-500 mt-1">
+                  <Text className="text-xs mt-1" style={{ color: colors.textMuted }}>
                     {editFiles.length} file(s) selected
                   </Text>
                 </TouchableOpacity>
 
                 {editFiles.length > 0 && (
-                  <View className="bg-gray-50 rounded-lg p-3 gap-2">
+                  <View className="rounded-lg p-3 gap-2" style={{ backgroundColor: colors.surface }}>
                     {editFiles.map((file, index) => (
                       <View
                         key={index}
-                        className="flex-row items-center justify-between bg-white border border-gray-200 rounded-lg p-3"
+                        className="flex-row items-center justify-between rounded-lg p-3"
+                        style={{ backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 }}
                       >
                         <View className="flex-row items-center gap-2 flex-1">
-                          <Ionicons name="document" size={18} color="#6B7280" />
-                          <Text className="text-sm text-gray-700 flex-1" numberOfLines={1}>
+                          <Ionicons name="document" size={18} color={colors.textMuted} />
+                          <Text className="text-sm flex-1" numberOfLines={1} style={{ color: colors.text }}>
                             {file.name}
                           </Text>
                         </View>
@@ -2135,15 +2150,16 @@ export default function TaskDetail() {
               </View>
 
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Priority</Text>
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>Priority</Text>
                 <TouchableOpacity
                   onPress={() => setShowPriorityPicker(true)}
-                  className="border border-gray-300 rounded-lg p-3 bg-white"
+                  className="border rounded-lg p-3"
+                  style={{ backgroundColor: colors.surface, borderColor: colors.border }}
                 >
                   <View className="flex-row justify-between items-center">
                     <View className="flex-row items-center gap-2">
                       <View className={`w-3 h-3 rounded-full ${getPriorityBadgeColor(editPriority)}`} />
-                      <Text className="text-gray-700 font-semibold">
+                      <Text className="font-semibold" style={{ color: colors.text }}>
                         {editPriority}
                       </Text>
                     </View>
@@ -2153,15 +2169,16 @@ export default function TaskDetail() {
               </View>
 
               <View className="mb-4">
-                <Text className="text-sm font-semibold text-gray-700 mb-2">Deadline (Date & Time)</Text>
+                <Text className="text-sm font-semibold mb-2" style={{ color: colors.textMuted }}>Deadline (Date & Time)</Text>
                 <TouchableOpacity
-                  className="border border-gray-300 rounded-lg p-3 bg-white"
+                  className="border rounded-lg p-3"
+                  style={{ backgroundColor: colors.surface, borderColor: colors.border }}
                   onPress={() => {
                     setShowDeadlinePicker(true);
                   }}
                 >
                   <View className="flex-row justify-between items-center">
-                    <Text className="text-gray-700 font-semibold">
+                    <Text className="font-semibold" style={{ color: isDark ? '#111111' : colors.text }}>
                       {new Date(editDeadline).toLocaleString('en-US', {
                         month: 'short',
                         day: 'numeric',
@@ -2180,7 +2197,7 @@ export default function TaskDetail() {
                   onPress={() => setShowEditModal(false)}
                   className="flex-1 border border-gray-300 rounded-lg py-3"
                 >
-                  <Text className="text-center text-gray-700 font-semibold">Cancel</Text>
+                  <Text className="text-center font-semibold" style={{ color: colors.text }}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={updateTask}
@@ -2205,10 +2222,10 @@ export default function TaskDetail() {
         transparent
         animationType="slide"
       >
-        <View className="flex-1 bg-black/50 justify-end">
-          <View className="bg-white rounded-t-2xl pb-6">
+        <View className="flex-1 justify-end" style={{ backgroundColor: colors.overlay }}>
+          <View className="rounded-t-2xl pb-6" style={{ backgroundColor: colors.surface }}>
             <View className="flex-row justify-between items-center p-4 border-b border-gray-200">
-              <Text className="text-lg font-semibold text-gray-900">Select Priority</Text>
+              <Text className="text-lg font-semibold" style={{ color: colors.text }}>Select Priority</Text>
               <TouchableOpacity onPress={() => setShowPriorityPicker(false)}>
                 <Ionicons name="close" size={24} color="#6B7280" />
               </TouchableOpacity>
@@ -2273,10 +2290,10 @@ export default function TaskDetail() {
         transparent
         animationType="slide"
       >
-        <View className="flex-1 bg-black/50 justify-end">
-          <View className="bg-white rounded-t-2xl pb-6">
+        <View className="flex-1 justify-end" style={{ backgroundColor: colors.overlay }}>
+          <View className="rounded-t-2xl pb-6" style={{ backgroundColor: colors.surface }}>
             <View className="flex-row justify-between items-center p-4 border-b border-gray-200">
-              <Text className="text-lg font-semibold text-gray-900">Select Deadline</Text>
+              <Text className="text-lg font-semibold" style={{ color: colors.text }}>Select Deadline</Text>
               <TouchableOpacity onPress={() => setShowDeadlinePicker(false)}>
                 <Ionicons name="close" size={24} color="#6B7280" />
               </TouchableOpacity>
@@ -2295,7 +2312,7 @@ export default function TaskDetail() {
                     >
                       <Ionicons name="chevron-back" size={24} color="#EAB308" />
                     </TouchableOpacity>
-                    <Text className="text-base font-semibold text-gray-900">
+                    <Text className="text-base font-semibold" style={{ color: colors.text }}>
                       {selectedDeadlineDate.toLocaleString('en-US', { month: 'long', year: 'numeric' })}
                     </Text>
                     <TouchableOpacity
@@ -2369,7 +2386,7 @@ export default function TaskDetail() {
                 </View>
 
                 <View className="border-t border-gray-200 pt-6">
-                  <Text className="text-sm font-semibold text-gray-700 mb-4">Time:</Text>
+                  <Text className="text-sm font-semibold mb-4" style={{ color: colors.textMuted }}>Time:</Text>
                   <View className="flex-row gap-4 items-center">
                     <View className="flex-1">
                       <Text className="text-xs text-gray-600 mb-2">Hour (1-12)</Text>
@@ -2474,8 +2491,8 @@ export default function TaskDetail() {
         transparent={true}
         onRequestClose={() => setShowCompleteConfirmModal(false)}
       >
-        <View className="flex-1 justify-center items-center bg-black/50">
-          <View className="bg-white rounded-2xl p-6 w-[85%]">
+        <View className="flex-1 justify-center items-center" style={{ backgroundColor: colors.overlay }}>
+          <View className="rounded-2xl p-6 w-[85%]" style={{ backgroundColor: colors.surface }}>
             <View className="items-center mb-4">
               <View className="bg-green-100 rounded-full p-4 mb-4">
                 <Ionicons name="checkmark-circle" size={40} color="#22C55E" />
